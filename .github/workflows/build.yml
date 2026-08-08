@@ -58,6 +58,7 @@ jobs:
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=version-16
+            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
 
           secret-files: |
             apps_json=./apps.json
