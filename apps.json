@@ -1,0 +1,10 @@
+[
+  {
+    "url": "https://github.com/frappe/payments",
+    "branch": "develop"
+  },
+  {
+    "url": "https://github.com/sergey-olshansky/lms",
+    "branch": "tutor-main"
+  }
+]
