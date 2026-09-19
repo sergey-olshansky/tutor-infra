@@ -101,10 +101,10 @@ chmod --reference="$env_file" "$temp_env"
 chown --reference="$env_file" "$temp_env"
 mv "$temp_env" "$env_file"
 
-if ! compose up -d --no-deps --force-recreate "${services[@]}"; then
+if ! compose up -d --pull never --no-deps --force-recreate "${services[@]}"; then
 	printf 'Container recreation failed; restoring tag %s...\n' "$current_tag" >&2
 	cp -a "$env_backup" "$env_file"
-	compose up -d --no-deps --force-recreate "${services[@]}" || true
+	compose up -d --pull never --no-deps --force-recreate "${services[@]}" || true
 	exit 1
 fi
 
