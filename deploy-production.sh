@@ -86,7 +86,7 @@ fi
 
 printf 'Current production tag: %s\n' "$current_tag"
 printf 'Creating Frappe backup before deployment...\n'
-compose exec -T backend bench --site "$site" backup --with-files
+compose exec -T backend bench --site "$site" backup --with-files </dev/null
 
 cp -a "$env_file" "$env_backup"
 temp_env=$(mktemp "${compose_dir}/.env.deploy.XXXXXX")
@@ -110,16 +110,24 @@ fi
 
 # Once migrations begin, automatic downgrade is unsafe. Keep the backup and
 # the new containers in place so recovery can be planned without data loss.
-if ! compose exec -T backend bench --site "$site" migrate; then
+if ! compose exec -T backend bench --site "$site" migrate </dev/null; then
 	printf 'Migration failed. Production remains on %s; previous env: %s\n' \
 		"$new_tag" "$env_backup" >&2
 	exit 1
 fi
 
-compose exec -T backend bench --site "$site" clear-cache
+compose exec -T backend bench --site "$site" clear-cache </dev/null
 compose ps "${services[@]}"
 printf 'Previous env backup: %s\n' "$env_backup"
 REMOTE_SCRIPT
+
+deployed_tag=$(ssh -o BatchMode=yes "$SSH_TARGET" \
+	"awk -F= '\$1 == \"CUSTOM_TAG\" {print \$2; exit}' '$COMPOSE_DIR/.env'")
+if [[ "$deployed_tag" != "$IMAGE_TAG" ]]; then
+	printf 'Tag verification failed: expected %s, production has %s\n' \
+		"$IMAGE_TAG" "$deployed_tag" >&2
+	exit 1
+fi
 
 printf 'Waiting for %s...\n' "$PUBLIC_URL"
 for attempt in {1..20}; do
