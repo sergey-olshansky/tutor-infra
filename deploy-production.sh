@@ -77,6 +77,8 @@ compose() {
 cd "$compose_dir"
 test -f "$env_file"
 docker image inspect "${image}:${new_tag}" >/dev/null
+docker run --rm --entrypoint bash "${image}:${new_tag}" -lc \
+	'cd /home/frappe/frappe-bench && env/bin/python -c "import PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer"'
 
 current_tag=$(awk -F= '$1 == "CUSTOM_TAG" {print $2; exit}' "$env_file")
 if [[ -z "$current_tag" ]]; then
@@ -103,6 +105,21 @@ mv "$temp_env" "$env_file"
 
 if ! compose up -d --pull never --no-deps --force-recreate "${services[@]}"; then
 	printf 'Container recreation failed; restoring tag %s...\n' "$current_tag" >&2
+	cp -a "$env_backup" "$env_file"
+	compose up -d --pull never --no-deps --force-recreate "${services[@]}" || true
+	exit 1
+fi
+
+backend_ready=0
+for attempt in {1..30}; do
+	if compose exec -T backend bench --site "$site" list-apps </dev/null >/dev/null 2>&1; then
+		backend_ready=1
+		break
+	fi
+	sleep 2
+done
+if [[ "$backend_ready" -ne 1 ]]; then
+	printf 'New backend did not become ready; restoring tag %s...\n' "$current_tag" >&2
 	cp -a "$env_backup" "$env_file"
 	compose up -d --pull never --no-deps --force-recreate "${services[@]}" || true
 	exit 1
