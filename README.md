@@ -2,7 +2,7 @@
 
 `Build Tutor Learning` builds the LMS branch `tutor-main` and publishes:
 
-- `ghcr.io/sergey-olshansky/tutor-learning:lms-<LMS commit SHA>`;
+- `ghcr.io/sergey-olshansky/tutor-learning:lms-<LMS SHA>-infra-<infra SHA>`;
 - `ghcr.io/sergey-olshansky/tutor-learning:main`.
 
 The workflow can also be started manually with an explicit `image_tag`.
@@ -13,7 +13,7 @@ Run from a trusted operator machine with working `gh` and `ssh tutor-vps`
 authentication:
 
 ```bash
-./deploy-production.sh lms-e0f33124
+./deploy-production.sh lms-a1d219ad-infra-01234567
 ```
 
 The script validates and pulls the exact tag before changing production. It

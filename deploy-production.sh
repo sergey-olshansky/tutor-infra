@@ -78,7 +78,7 @@ cd "$compose_dir"
 test -f "$env_file"
 docker image inspect "${image}:${new_tag}" >/dev/null
 docker run --rm --entrypoint bash "${image}:${new_tag}" -lc \
-	'cd /home/frappe/frappe-bench && env/bin/python -c "import PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer"'
+	'cd /home/frappe/frappe-bench && env/bin/python -c "import shutil, PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer; assert shutil.which('\''pdftoppm'\''), '\''pdftoppm is missing'\''"'
 
 current_tag=$(awk -F= '$1 == "CUSTOM_TAG" {print $2; exit}' "$env_file")
 if [[ -z "$current_tag" ]]; then

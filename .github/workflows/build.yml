@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Optional image tag (defaults to lms-<LMS commit SHA>)"
+        description: "Optional tag (defaults to lms-<LMS SHA>-infra-<infra SHA>)"
         required: false
         type: string
   push:
@@ -12,6 +12,7 @@ on:
       - main
     paths:
       - "apps.json"
+      - "Containerfile"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -44,7 +45,7 @@ jobs:
             exit 1
           fi
 
-          TAG=${REQUESTED_TAG:-lms-${LMS_SHA:0:8}}
+          TAG=${REQUESTED_TAG:-lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}}
           if [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Invalid image tag: $TAG" >&2
             exit 1
@@ -68,7 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frappe_docker
-          file: ./frappe_docker/images/layered/Containerfile
+          file: ./Containerfile
           platforms: linux/amd64
           push: true
 
