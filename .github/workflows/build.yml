@@ -3,6 +3,10 @@ name: Build Tutor Learning
 on:
   workflow_dispatch:
     inputs:
+      lms_branch:
+        description: "Ветка LMS для сборки (по умолчанию tutor-main). Tip ветки фиксируется в теге образа."
+        required: false
+        type: string
       image_tag:
         description: "Optional tag (defaults to lms-<LMS SHA>-infra-<infra SHA>)"
         required: false
@@ -33,18 +37,36 @@ jobs:
           repository: frappe/frappe_docker
           path: frappe_docker
 
+      - name: Resolve LMS branch to an exact commit
+        shell: bash
+        env:
+          REQUESTED_BRANCH: ${{ inputs.lms_branch }}
+        run: |
+          set -euo pipefail
+          BRANCH="${REQUESTED_BRANCH:-tutor-main}"
+          if [[ ! "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Invalid branch name: $BRANCH" >&2
+            exit 1
+          fi
+          LMS_SHA=$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$BRANCH" | awk '{print $1}')
+          if [[ ! "$LMS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve branch $BRANCH" >&2
+            exit 1
+          fi
+          echo "LMS_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          echo "LMS_SHA=$LMS_SHA" >> "$GITHUB_ENV"
+          #apps.json этой сборки указывает на выбранную ветку, а не на зашитую tutor-main
+          jq --arg url "https://github.com/sergey-olshansky/lms" --arg branch "$BRANCH" \
+            '.[1] = {url: $url, branch: $branch}' apps.json > apps.build.json
+          mv apps.build.json apps.json
+          cat apps.json
+
       - name: Set image variables
         shell: bash
         env:
           REQUESTED_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          LMS_SHA=$(git ls-remote https://github.com/sergey-olshansky/lms refs/heads/tutor-main | awk '{print $1}')
-          if [[ ! "$LMS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve tutor-main LMS commit" >&2
-            exit 1
-          fi
-
           TAG=${REQUESTED_TAG:-lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}}
           if [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Invalid image tag: $TAG" >&2
@@ -53,7 +75,6 @@ jobs:
 
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tutor-learning" >> "$GITHUB_ENV"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "LMS_SHA=$LMS_SHA" >> "$GITHUB_ENV"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -88,9 +109,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Verify branch tip did not move during the build
+        shell: bash
+        run: |
+          set -euo pipefail
+          AFTER=$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$LMS_BRANCH" | awk '{print $1}')
+          if [[ "$AFTER" != "$LMS_SHA" ]]; then
+            echo "::error::Branch $LMS_BRANCH moved during the build ($LMS_SHA -> $AFTER). The image tag no longer reflects its contents; rebuild required." >&2
+            exit 1
+          fi
+
       - name: Show result
         run: |
           echo "Built:"
           echo "${IMAGE}:${TAG}"
-          echo "${IMAGE}:main"
+          echo "LMS branch: ${LMS_BRANCH}"
           echo "LMS commit: ${LMS_SHA}"
