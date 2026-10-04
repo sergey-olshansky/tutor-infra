@@ -51,16 +51,31 @@ jobs:
             exit 1
           fi
 
-      - name: Pull image and transfer to preprod
+      - name: Transfer image if missing (single-image rotation)
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          IMG="ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}"
+          PRESENT=$(ssh root@135.106.161.70 "docker image inspect '$IMG' >/dev/null 2>&1 && echo yes || echo no")
+          echo "Образ на preprod: $PRESENT"
+          if [[ "$PRESENT" == "yes" ]]; then
+            echo "Передача не нужна (тег уже на сервере)."
+            exit 0
+          fi
           echo "${GITHUB_TOKEN}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull "ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}"
-          docker save "ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}" \
-            | gzip | ssh root@135.106.161.70 'gunzip | docker load'
+          docker pull "$IMG"
+          echo "Останавливаем сервисы и освобождаем место под один новый образ:"
+          ssh root@135.106.161.70 bash -s <<'REMOTE'
+          set -Eeuo pipefail
+          cd /srv/tutor/frappe_docker
+          docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor stop backend websocket frontend scheduler queue-short
+          docker image rm -f $(docker images -q ghcr.io/sergey-olshansky/tutor-learning) 2>/dev/null || true
+          docker system prune -f >/dev/null
+          df -h / | tail -1
+          REMOTE
+          docker save "$IMG" | gzip | ssh root@135.106.161.70 'gunzip | docker load'
 
       - name: Switch preprod to the image
         env:
@@ -84,7 +99,8 @@ jobs:
             [[ "$code" == "200" ]] && break
             sleep 5
           done
-          [[ "$code" == "200" ]] || { echo "::error::Сайт не поднялся (последний код $code)"; exit 1; }
+          [[ "$code" == "200" ]] || { echo "::error::Сайт не поднялся (код $code)"; exit 1; }
+          docker system prune -f >/dev/null 2>&1 || true
           echo "PREPROD OK"
           REMOTE
 
