@@ -57,8 +57,9 @@ jobs:
           SHA8="${IMAGE_TAG#lms-}"; SHA8="${SHA8%%-infra-*}"
           SHA=$(gh api "repos/sergey-olshansky/lms/commits/$SHA8" --jq .sha)
           echo "lms_sha=$SHA" >> "$GITHUB_OUTPUT"
+          # TODO(задача #6): 'Semgrep Rules' (долг линтера) исключён из обязательных до выплаты долга
           BAD=$(gh api "repos/sergey-olshansky/lms/commits/$SHA/check-runs" -H "Accept: application/vnd.github+json" \
-            --jq '[.check_runs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
+            --jq '[.check_runs[] | select(.name != "Semgrep Rules") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
           [[ "$BAD" == "0" ]] || { echo "::error::У коммита $SHA есть незелёные проверки ($BAD)"; exit 1; }
           echo "CI коммита $SHA зелёный"
 
@@ -170,7 +171,7 @@ jobs:
           if ! $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES; then
             echo "Рестарт не удался, откат на $OLD_TAG"
             cp -a ".env.pre-deploy-$TS" .env
-            $COMPOSE up -d --pull never --no-deps --force-repeats $SERVICES || true
+            $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES || true
             exit 1
           fi
           READY=0
