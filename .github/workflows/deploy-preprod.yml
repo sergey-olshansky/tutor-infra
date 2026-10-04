@@ -1,0 +1,93 @@
+name: Deploy to Preprod
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Тег образа (lms-<sha8>-infra-<sha8>) из workflow Build"
+        required: true
+        type: string
+      task_id:
+        description: "Номер задачи Vikunja, занимающей preprod"
+        required: true
+        type: string
+      force:
+        description: "Принудительно сменить занимающую задачу (только владельцу!)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: preprod-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Setup SSH
+        run: |
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Check preprod occupancy (one task at a time)
+        shell: bash
+        env:
+          TASK_ID: ${{ inputs.task_id }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null | head -1' || echo "")
+          echo "Preprod занят: '${CURRENT:-<свободен>}'; выкладываем задачу: '${TASK_ID}'"
+          if [[ -n "$CURRENT" && "$CURRENT" != "$TASK_ID" && "$FORCE" != "true" ]]; then
+            echo "::error::Preprod занят задачей ${CURRENT}. Вторая задача не заменяет первую: закройте текущую (или запустите с force, если вы владелец и понимаете последствия)." >&2
+            exit 1
+          fi
+
+      - name: Pull image and transfer to preprod
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          echo "${GITHUB_TOKEN}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull "ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}"
+          docker save "ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}" \
+            | gzip | ssh root@135.106.161.70 'gunzip | docker load'
+
+      - name: Switch preprod to the image
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          TASK_ID: ${{ inputs.task_id }}
+        run: |
+          set -euo pipefail
+          ssh root@135.106.161.70 bash -s -- "$IMAGE_TAG" "$TASK_ID" <<'REMOTE'
+          set -Eeuo pipefail
+          IMAGE_TAG="$1"; TASK_ID="$2"
+          cd /srv/tutor/frappe_docker
+          sed -i "s/^CUSTOM_TAG=.*/CUSTOM_TAG=${IMAGE_TAG}/" .env
+          printf '%s\n%s\n%s\n' "$TASK_ID" "$IMAGE_TAG" "$(date -u +%FT%TZ)" > .preprod-task
+          DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
+          DC up -d --pull never backend websocket frontend scheduler queue-short 2>&1 | tail -5
+          sleep 25
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site 135.106.161.70 migrate" | tail -3 || true
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site 135.106.161.70 clear-cache" 2>&1 | tail -1
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: 135.106.161.70" http://127.0.0.1:8080/api/method/ping || true)
+            [[ "$code" == "200" ]] && break
+            sleep 5
+          done
+          [[ "$code" == "200" ]] || { echo "::error::Сайт не поднялся (последний код $code)"; exit 1; }
+          echo "PREPROD OK"
+          REMOTE
+
+      - name: Result
+        run: |
+          echo "Задача #${{ inputs.task_id }} выложена на preprod:"
+          echo "URL:   http://135.106.161.70:8080"
+          echo "Образ: ghcr.io/sergey-olshansky/tutor-learning:${{ inputs.image_tag }}"
