@@ -1,0 +1,247 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Неизменяемый тег образа (lms-<sha8>-infra-<sha8>), проверенный на preprod"
+        required: true
+        type: string
+      task_id:
+        description: "Номер задачи Vikunja"
+        required: true
+        type: string
+      dry_run:
+        description: "Только префлайт, без выкладки (не входит в production)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  preflight:
+    name: Preflight (проверки перед выпуском)
+    runs-on: ubuntu-latest
+    outputs:
+      lms_sha: ${{ steps.resolve.outputs.lms_sha }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      TASK_ID: ${{ inputs.task_id }}
+    steps:
+      - name: Формат тега
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_TAG" =~ ^lms-[0-9a-f]{8}-infra-[0-9a-f]{8}$ ]] || { echo "::error::Тег должен быть вида lms-<sha8>-infra-<sha8>"; exit 1; }
+          echo "Тег корректен: $IMAGE_TAG"
+
+      - name: Образ существует в GHCR
+        run: |
+          set -euo pipefail
+          echo "${GH_TOKEN}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker manifest inspect "ghcr.io/sergey-olshansky/tutor-learning:${IMAGE_TAG}" >/dev/null \
+            || { echo "::error::Образ не найден в GHCR"; exit 1; }
+          echo "Образ найден"
+
+      - name: CI коммита зелёный
+        id: resolve
+        run: |
+          set -euo pipefail
+          SHA8="${IMAGE_TAG#lms-}"; SHA8="${SHA8%%-infra-*}"
+          SHA=$(gh api "repos/sergey-olshansky/lms/commits/$SHA8" --jq .sha)
+          echo "lms_sha=$SHA" >> "$GITHUB_OUTPUT"
+          BAD=$(gh api "repos/sergey-olshansky/lms/commits/$SHA/check-runs" -H "Accept: application/vnd.github+json" \
+            --jq '[.check_runs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length')
+          [[ "$BAD" == "0" ]] || { echo "::error::У коммита $SHA есть незелёные проверки ($BAD)"; exit 1; }
+          echo "CI коммита $SHA зелёный"
+
+      - name: Образ сейчас стоит на preprod (крест-проверка)
+        env:
+          PREPROD_KEY: ${{ secrets.PREPROD_SSH_KEY }}
+          PREPROD_KH: ${{ secrets.PREPROD_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s' "$PREPROD_KEY" > ~/.ssh/id_ed25519
+          printf '%s' "$PREPROD_KH" > ~/.ssh/known_hosts
+          READ=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
+          PP_TASK=$(echo "$READ" | awk '{print $1}')
+          PP_IMAGE=$(echo "$READ" | awk '{print $2}')
+          echo "Preprod: задача '$PP_TASK', образ '$PP_IMAGE'"
+          [[ "$PP_TASK" == "$TASK_ID" && "$PP_IMAGE" == "$IMAGE_TAG" ]] \
+            || { echo "::error::На preprod не этот образ/задача. Выпускать можно только проверенное на preprod."; exit 1; }
+          echo "Крест-проверка пройдена"
+
+      - name: Итог префлайта
+        run: |
+          echo "=============================================="
+          echo " Задача:   Vikunja #${TASK_ID}"
+          echo " Образ:    ${IMAGE_TAG}"
+          echo " Commit:   ${{ steps.resolve.outputs.lms_sha }}"
+          echo " CI:       зелёный; preprod: подтверждён"
+          echo "=============================================="
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "DRY RUN: префлайт успешен, выкладка НЕ выполнялась."
+          fi
+
+  deploy:
+    name: Деплой (нужно подтверждение одного из двух)
+    needs: preflight
+    if: ${{ !inputs.dry_run }}
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      TASK_ID: ${{ inputs.task_id }}
+      GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: SSH к production
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s' "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s' "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          ssh -o BatchMode=yes root@139.100.236.90 'echo соединение установлено'
+
+      - name: Скачать образ на production (токен не сохраняется)
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@139.100.236.90 bash -s -- "$IMAGE_TAG" "$GHCR_TOKEN" <<'REMOTE'
+          set -Eeuo pipefail
+          TAG="$1"; TOKEN="$2"
+          TEMP=$(mktemp -d /tmp/tutor-ghcr.XXXXXX)
+          trap 'rm -rf "$TEMP"' EXIT
+          printf '%s' "$TOKEN" | docker --config "$TEMP" login ghcr.io --username sergey-olshansky --password-stdin >/dev/null
+          docker --config "$TEMP" pull "ghcr.io/sergey-olshansky/tutor-learning:$TAG"
+          REMOTE
+
+      - name: Бекап с проверкой + копия на control + переключение
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@139.100.236.90 bash -s -- "$IMAGE_TAG" <<'REMOTE'
+          set -Eeuo pipefail
+          TAG="$1"
+          cd /srv/tutor/frappe_docker
+          COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
+          SITE="learn.vladastay.ru"
+          IMAGE="ghcr.io/sergey-olshansky/tutor-learning"
+          SERVICES="backend frontend websocket scheduler queue-short queue-long"
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+
+          echo "== 1. Преффлайт образа"
+          docker image inspect "$IMAGE:$TAG" >/dev/null
+          docker run --rm --entrypoint bash "$IMAGE:$TAG" -lc \
+            'cd /home/frappe/frappe-bench && env/bin/python -c "import shutil, PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer; assert shutil.which(\"pdftoppm\"), \"pdftoppm is missing\""'
+
+          echo "== 2. Бекап"
+          OLD_TAG=$(awk -F= '$1=="CUSTOM_TAG"{print $2; exit}' .env)
+          echo "Текущий выпуск: $OLD_TAG"
+          $COMPOSE exec -T backend bench --site "$SITE" backup --with-files </dev/null
+          BACKUPS=/home/frappe/frappe-bench/sites/$SITE/private/backups
+          CID=$($COMPOSE ps -q backend)
+          DBFILE=$(docker exec "$CID" ls -t "$BACKUPS" | grep '^database.*sql.gz$' | head -1)
+          [ -n "$DBFILE" ] || { echo "::error::Бекап: не найден дамп базы"; exit 1; }
+          docker exec "$CID" sh -c "cd $BACKUPS && gzip -t '$DBFILE'" || { echo "::error::Бекап: дамп не проходит проверку gzip"; exit 1; }
+          SZ=$(docker exec "$CID" stat -c%s "$BACKUPS/$DBFILE")
+          [ "$SZ" -gt 10240 ] || { echo "::error::Бекап: дамп подозрительно мал ($SZ байт)"; exit 1; }
+          echo "Бекап проверен: $DBFILE ($SZ байт, gzip цел)"
+          mkdir -p /tmp/prod-backup-$TS
+          docker cp "$CID:$BACKUPS/." /tmp/prod-backup-$TS/ >/dev/null
+          tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS" ." >/dev/null 2>&1 || tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS .
+          rm -rf /tmp/prod-backup-$TS
+          echo "== 3. Копия бекапа на control (write-only канал)"
+          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@135.106.196.249 \
+            "put lms-backup-$SITE-$TS.tgz" < /tmp/lms-backup-$SITE-$TS.tgz
+          rm -f /tmp/lms-backup-$SITE-$TS.tgz
+
+          echo "== 4. Переключение на $TAG"
+          cp -a .env ".env.pre-deploy-$TS"
+          TMP=$(mktemp); awk -v t="$TAG" 'BEGIN{u=0} /^CUSTOM_TAG=/{print "CUSTOM_TAG=" t; u=1; next} {print} END{if(!u) print "CUSTOM_TAG=" t}' .env > "$TMP"
+          chmod --reference=.env "$TMP" && mv "$TMP" .env
+          if ! $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES; then
+            echo "Рестарт не удался, откат на $OLD_TAG"
+            cp -a ".env.pre-deploy-$TS" .env
+            $COMPOSE up -d --pull never --no-deps --force-repeats $SERVICES || true
+            exit 1
+          fi
+          READY=0
+          for i in $(seq 1 30); do
+            $COMPOSE exec -T backend bench --site "$SITE" list-apps </dev/null >/dev/null 2>&1 && { READY=1; break; }
+            sleep 2
+          done
+          if [ "$READY" != "1" ]; then
+            echo "Backend не поднялся, откат на $OLD_TAG"
+            cp -a ".env.pre-deploy-$TS" .env
+            $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES || true
+            exit 1
+          fi
+          $COMPOSE exec -T backend bench --site "$SITE" migrate </dev/null
+          $COMPOSE exec -T backend bench --site "$SITE" clear-cache </dev/null
+          DEPLOYED=$(awk -F= '$1=="CUSTOM_TAG"{print $2; exit}' .env)
+          [ "$DEPLOYED" = "$TAG" ] || { echo "::error::CUSTOM_TAG не совпал"; exit 1; }
+          echo "PROD_SWITCH_OK"
+          REMOTE
+
+      - name: Проверка сайта
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://learn.vladastay.ru/lms || true)
+            [[ "$code" == "200" ]] && break
+            sleep 3
+          done
+          [[ "$code" == "200" ]] || { echo "::error::Сайт не отвечает после выпуска (код $code)"; exit 1; }
+          echo "Сайт отвечает 200"
+
+  report:
+    name: Отчёт и журнал
+    needs: deploy
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Запись в releases.log
+        if: ${{ needs.deploy.result == 'success' }}
+        run: |
+          set -euo pipefail
+          LINE="$(date -u +%FT%TZ) | task #${{ inputs.task_id }} | ${{ inputs.image_tag }} | commit ${{ needs.preflight.outputs.lms_sha }} | ${{ github.actor }}"
+          mkdir -p repo && cd repo
+          git clone -q --depth 5 "https://x-access-token:${GITHUB_TOKEN}@github.com/sergey-olshansky/tutor-infra" .
+          git config user.name "release-bot" && git config user.email "release-bot@users.noreply.github.com"
+          mkdir -p releases
+          echo "$LINE" >> releases/releases.log
+          git add releases/releases.log
+          git commit -qm "release: task #${{ inputs.task_id }} -> ${{ inputs.image_tag }}" || true
+          git push -q origin main
+          echo "Записано: $LINE"
+          echo ""
+          echo "ПОСЛЕДНИЙ ШАГ (руками или агентом): двигните тег released/<дата> на commit ${{ needs.preflight.outputs.lms_sha }} в lms и закройте PR задачи."
+
+      - name: Отчёт в Telegram (чат Edu_project)
+        if: ${{ always() }}
+        env:
+          TG_TOKEN: ${{ secrets.RELEASE_TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.RELEASE_TG_CHAT_ID }}
+        run: |
+          STATUS="${{ needs.deploy.result }}"
+          case "$STATUS" in
+            success) EMOJI="✅"; TEXT="Выпуск выполнен";;
+            failure) EMOJI="❌"; TEXT="Выпуск НЕ выполнен — задача остаётся открытой";;
+            *) EMOJI="ℹ️"; TEXT="Выпуск: статус $STATUS";;
+          esac
+          MSG="$EMOJI $TEXT
+Задача: #${{ inputs.task_id }}
+Образ: ${{ inputs.image_tag }}
+Commit: \`${{ needs.preflight.outputs.lms_sha }}\`
+Кто подтвердил: ${{ github.actor }}
+Сайт: https://learn.vladastay.ru/lms"
+          curl -s --max-time 20 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d chat_id="$TG_CHAT" -d text="$MSG" >/dev/null || echo "(telegram недоступен с раннера — не критично)"
