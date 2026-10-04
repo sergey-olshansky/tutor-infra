@@ -32,6 +32,7 @@ jobs:
     steps:
       - name: Setup SSH
         run: |
+          mkdir -p ~/.ssh
           install -m 600 /dev/null ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
