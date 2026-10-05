@@ -23,10 +23,17 @@ jobs:
       - name: Run on preprod
         env:
           CMD: ${{ inputs.cmd }}
+          CONTROL_KEY: ${{ secrets.CONTROL_SSH_KEY }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           install -m 600 /dev/null ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          ssh root@135.106.161.70 bash -s <<REMOTE
+          install -m 600 /dev/null /root/.ssh/to-control
+          cat > /root/.ssh/to-control <<'KEY'
+          \${CONTROL_KEY}
+          KEY
           ssh root@135.106.161.70 bash -s <<< "$CMD"
+          REMOTE
