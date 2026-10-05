@@ -1,0 +1,32 @@
+name: Ops Exec (preprod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: "Команда на preprod (root)"
+        required: true
+        type: string
+
+concurrency:
+  group: ops-exec
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run on preprod
+        env:
+          CMD: ${{ inputs.cmd }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          ssh root@135.106.161.70 bash -s <<< "$CMD"
