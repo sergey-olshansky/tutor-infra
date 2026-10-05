@@ -134,6 +134,8 @@ jobs:
           REMOTE
 
       - name: Switch production to image
+        env:
+          PROD_SITE_SECRET: ${{ secrets.PROD_SITE_SECRET }}
         run: |
           set -euo pipefail
           ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" "$PROD_SITE_SECRET" <<'REMOTE'
