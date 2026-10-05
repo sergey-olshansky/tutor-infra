@@ -136,36 +136,28 @@ jobs:
       - name: Switch production to image
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" <<'REMOTE'
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" "$PROD_SITE_SECRET" <<'REMOTE'
           set -Eeuo pipefail
-          TAG="$1"; SITE="${2:-learn.vladastay.ru}"
+          TAG="$1"; SITE="$2"
           cd /srv/tutor/frappe_docker
           COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
-          SITE="$2"
           IMAGE="ghcr.io/sergey-olshansky/tutor-learning"
           SERVICES="backend frontend websocket scheduler queue-short queue-long"
           TS=$(date -u +%Y%m%dT%H%M%SZ)
+          OLD_TAG=$(awk -F= '$1=="CUSTOM_TAG"{print $2; exit}' .env)
+          echo "Current: $OLD_TAG -> New: $TAG"
 
-          echo "== 1. Преффлайт образа"
+          echo "== 1. Image preflight"
           docker image inspect "$IMAGE:$TAG" >/dev/null
           docker run --rm --entrypoint bash "$IMAGE:$TAG" -lc \
             'cd /home/frappe/frappe-bench && env/bin/python -c "import shutil, PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer; assert shutil.which(\"pdftoppm\"), \"pdftoppm is missing\""'
 
-          echo "== 2. Бекап"
-                    echo "Текущий выпуск: $OLD_TAG"
-                                                  [ -n "$DBFILE" ] || { echo "::error::Бекап: не найден дамп базы"; exit 1; }
-          docker exec "$CID" sh -c "cd $BACKUPS && gzip -t '$DBFILE'" || { echo "::error::Бекап: дамп не проходит проверку gzip"; exit 1; }
-                    [ "$SZ" -gt 10240 ] || { echo "::error::Бекап: дамп подозрительно мал ($SZ байт)"; exit 1; }
-          echo "Бекап проверен: $DBFILE ($SZ байт, gzip цел)"
-                              tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS" ." >/dev/null 2>&1 || tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS .
-                    echo "== 3. Копия бекапа на control (write-only канал)"
-                            
-          echo "== 4. Переключение на $TAG"
+          echo "== 2. Switch to $TAG"
           cp -a .env ".env.pre-deploy-$TS"
           TMP=$(mktemp); awk -v t="$TAG" 'BEGIN{u=0} /^CUSTOM_TAG=/{print "CUSTOM_TAG=" t; u=1; next} {print} END{if(!u) print "CUSTOM_TAG=" t}' .env > "$TMP"
           chmod --reference=.env "$TMP" && mv "$TMP" .env
           if ! $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES; then
-            echo "Рестарт не удался, откат на $OLD_TAG"
+            echo "Rollback to $OLD_TAG"
             cp -a ".env.pre-deploy-$TS" .env
             $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES || true
             exit 1
@@ -176,7 +168,7 @@ jobs:
             sleep 2
           done
           if [ "$READY" != "1" ]; then
-            echo "Backend не поднялся, откат на $OLD_TAG"
+            echo "Backend not ready, rollback to $OLD_TAG"
             cp -a ".env.pre-deploy-$TS" .env
             $COMPOSE up -d --pull never --no-deps --force-recreate $SERVICES || true
             exit 1
@@ -184,7 +176,7 @@ jobs:
           $COMPOSE exec -T backend bench --site "$SITE" migrate </dev/null
           $COMPOSE exec -T backend bench --site "$SITE" clear-cache </dev/null
           DEPLOYED=$(awk -F= '$1=="CUSTOM_TAG"{print $2; exit}' .env)
-          [ "$DEPLOYED" = "$TAG" ] || { echo "::error::CUSTOM_TAG не совпал"; exit 1; }
+          [ "$DEPLOYED" = "$TAG" ] || { echo "CUSTOM_TAG mismatch"; exit 1; }
           echo "PROD_SWITCH_OK"
           REMOTE
 
