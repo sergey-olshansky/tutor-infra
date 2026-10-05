@@ -150,7 +150,7 @@ jobs:
           $COMPOSE exec -T backend bench --site "$SITE" backup --with-files </dev/null
           BACKUPS=/home/frappe/frappe-bench/sites/$SITE/private/backups
           CID=$($COMPOSE ps -q backend)
-          DBFILE=$(docker exec "$CID" ls -t "$BACKUPS" | grep '^database.*sql.gz$' | head -1)
+          DBFILE=$(docker exec "$CID" ls -t "$BACKUPS" | grep 'database\.sql\.gz$' | head -1 || true)
           [ -n "$DBFILE" ] || { echo "::error::Бекап: не найден дамп базы"; exit 1; }
           docker exec "$CID" sh -c "cd $BACKUPS && gzip -t '$DBFILE'" || { echo "::error::Бекап: дамп не проходит проверку gzip"; exit 1; }
           SZ=$(docker exec "$CID" stat -c%s "$BACKUPS/$DBFILE")
