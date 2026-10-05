@@ -205,7 +205,7 @@ jobs:
 
 
   post-release:
-    name: Релизный бот: тег released/* и закрытие PR
+    name: "Релизный бот — тег released/* и закрытие PR"
     needs: [preflight, deploy]
     if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
@@ -245,7 +245,6 @@ jobs:
           set -uo pipefail
           export GH_TOKEN="$GH_APP_TOKEN"
           TAG="released/$(date -u +%F)"
-          if git mktag() { :; } 2>/dev/null; then :; fi
           # аннотированный тег через API
           TAGOBJ=$(gh api -X POST repos/sergey-olshansky/lms/git/tags -f tag="$TAG"             -f message="Выпуск задачи #$TASK_ID (образ $IMAGE_TAG) — релизный бот"             -f object="$SHA" -f type=commit --jq .sha 2>/dev/null) || TAGOBJ=""
           if [ -n "$TAGOBJ" ]; then
