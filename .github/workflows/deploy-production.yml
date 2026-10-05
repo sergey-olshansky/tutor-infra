@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       lms_sha: ${{ steps.resolve.outputs.lms_sha }}
+      task_id: ${{ steps.ptask.outputs.task_id }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       IMAGE_TAG: ${{ inputs.image_tag }}
@@ -64,6 +65,7 @@ jobs:
           echo "CI коммита $SHA зелёный"
 
       - name: Образ сейчас стоит на preprod (крест-проверка)
+        id: ptask
         env:
           PREPROD_KEY: ${{ secrets.PREPROD_SSH_KEY }}
           PREPROD_KH: ${{ secrets.PREPROD_KNOWN_HOSTS }}
@@ -76,6 +78,7 @@ jobs:
           READ=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
           PP_TASK=$(echo "$READ" | awk '{print $1}')
           if [[ -z "$TASK_ID" ]]; then TASK_ID="$PP_TASK"; echo "task_id не передан — взят из preprod: $TASK_ID"; fi
+          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
           PP_IMAGE=$(echo "$READ" | awk '{print $2}')
           echo "Preprod: задача '$PP_TASK', образ '$PP_IMAGE'"
           [[ "$PP_TASK" == "$TASK_ID" && "$PP_IMAGE" == "$IMAGE_TAG" ]] \
@@ -240,7 +243,7 @@ jobs:
         env:
           GH_APP_TOKEN: ${{ steps.app.outputs.token }}
           SHA: ${{ needs.preflight.outputs.lms_sha }}
-          TASK_ID: ${{ inputs.task_id }}
+          TASK_ID: ${{ needs.preflight.outputs.task_id }}
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           set -uo pipefail
@@ -250,8 +253,9 @@ jobs:
           TAGOBJ=$(gh api -X POST repos/sergey-olshansky/lms/git/tags -f tag="$TAG"             -f message="Выпуск задачи #$TASK_ID (образ $IMAGE_TAG) — релизный бот"             -f object="$SHA" -f type=commit --jq .sha 2>/dev/null) || TAGOBJ=""
           if [ -n "$TAGOBJ" ]; then
             REF="refs/tags/$TAG"
-            if gh api repos/sergey-olshansky/lms/git/refs/"$TAG" >/dev/null 2>&1; then
-              gh api -X PATCH repos/sergey-olshansky/lms/git/refs/"$TAG" -f sha="$TAGOBJ" -F force=true >/dev/null && echo "Тег $TAG сдвинут на $SHA"
+            ENC="tags/${TAG//\//%2F}"
+            if gh api "repos/sergey-olshansky/lms/git/ref/$ENC" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/sergey-olshansky/lms/git/refs/$ENC" -f sha="$TAGOBJ" -F force=true >/dev/null && echo "Тег $TAG сдвинут на $SHA"
             else
               gh api -X POST repos/sergey-olshansky/lms/git/refs -f ref="$REF" -f sha="$TAGOBJ" >/dev/null && echo "Тег $TAG создан на $SHA"
             fi
