@@ -273,6 +273,8 @@ jobs:
     steps:
       - name: Запись в releases.log
         if: ${{ needs.deploy.result == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           LINE="$(date -u +%FT%TZ) | task #${{ inputs.task_id }} | ${{ inputs.image_tag }} | commit ${{ needs.preflight.outputs.lms_sha }} | ${{ github.actor }}"
