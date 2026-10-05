@@ -37,6 +37,12 @@ jobs:
           else:
               print("unit: Restart уже есть")
           PYEOF
+          if ! grep -q "Надёжность хода" /opt/openclaw/skills-src/lms-coordinator/SKILL.md; then
+            printf '\n## Надёжность хода (важно)\n- Работай КОРОТКИМИ шагами: 1-3 инструмента за ход, затем промежуточный ответ человеку.\n- Не строй длинные цепочки из 8+ вызовов подряд — они чаще обрываются сбоем модели.\n- Если действие наполовину выполнено и что-то сломалось — сообщи, что УЖЕ сделано и что осталось, а не начинай сначала.\n- После создания/изменения задачи всегда подтверждай человеку её номер и статус.\n' >> /opt/openclaw/skills-src/lms-coordinator/SKILL.md
+            chown openclaw:openclaw /opt/openclaw/skills-src/lms-coordinator/SKILL.md
+          fi
+          sudo -u openclaw -H bash -c 'cd /opt/openclaw && /opt/openclaw/.npm-global/bin/openclaw skills install /opt/openclaw/skills-src/lms-coordinator --agent main --force' | tail -1
+          echo "СКИЛЛ источник=$(grep -c Надёжность /opt/openclaw/skills-src/lms-coordinator/SKILL.md) установлен=$(grep -c Надёжность /opt/openclaw/workspaces/coordinator/skills/lms-coordinator/SKILL.md)"
           sudo -u openclaw -H bash -c 'cd /opt/openclaw && XDG_RUNTIME_DIR=/run/user/1500 systemctl --user daemon-reload && XDG_RUNTIME_DIR=/run/user/1500 systemctl --user restart openclaw-gateway.service'
           sleep 20
           systemctl --user -M openclaw@ is-active openclaw-gateway.service
