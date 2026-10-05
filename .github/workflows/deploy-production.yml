@@ -138,10 +138,10 @@ jobs:
           set -euo pipefail
           ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" <<'REMOTE'
           set -Eeuo pipefail
-          TAG="$1"
+          TAG="$1"; SITE="${2:-learn.vladastay.ru}"
           cd /srv/tutor/frappe_docker
           COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
-          SITE="${PROD_SITE_SECRET}"
+          SITE="$2"
           IMAGE="ghcr.io/sergey-olshansky/tutor-learning"
           SERVICES="backend frontend websocket scheduler queue-short queue-long"
           TS=$(date -u +%Y%m%dT%H%M%SZ)
