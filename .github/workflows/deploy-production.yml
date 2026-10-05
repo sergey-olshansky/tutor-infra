@@ -71,8 +71,8 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           install -m 600 /dev/null ~/.ssh/id_ed25519
-          printf '%s' "$PREPROD_KEY" > ~/.ssh/id_ed25519
-          printf '%s' "$PREPROD_KH" > ~/.ssh/known_hosts
+          echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           READ=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
           PP_TASK=$(echo "$READ" | awk '{print $1}')
           PP_IMAGE=$(echo "$READ" | awk '{print $2}')
@@ -109,8 +109,8 @@ jobs:
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           install -m 600 /dev/null ~/.ssh/id_ed25519
-          printf '%s' "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
-          printf '%s' "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           ssh -o BatchMode=yes root@139.100.236.90 'echo соединение установлено'
 
       - name: Скачать образ на production (токен не сохраняется)
