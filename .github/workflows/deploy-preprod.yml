@@ -72,8 +72,10 @@ jobs:
           cd /srv/tutor/frappe_docker
           docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor stop backend websocket frontend scheduler queue-short
           docker image rm -f $(docker images -q ghcr.io/sergey-olshansky/tutor-learning) 2>/dev/null || true
-          docker system prune -f >/dev/null
-          df -h / | tail -1
+          docker system prune -af --volumes=false >/dev/null 2>&1 || true
+          rm -rf /tmp/prod-backup-* /var/tmp/* 2>/dev/null || true
+          apt-get clean 2>/dev/null || true
+          echo "Место после чистки:"; df -h / | tail -1
           REMOTE
           docker save "$IMG" | gzip | ssh root@135.106.161.70 'gunzip | docker load'
 
