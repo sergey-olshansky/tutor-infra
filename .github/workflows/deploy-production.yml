@@ -8,8 +8,8 @@ on:
         required: true
         type: string
       task_id:
-        description: "Номер задачи Vikunja"
-        required: true
+        description: "Номер задачи Vikunja (пусто = взять из preprod)"
+        required: false
         type: string
       dry_run:
         description: "Только префлайт, без выкладки (не входит в production)"
@@ -75,6 +75,7 @@ jobs:
           echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           READ=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
           PP_TASK=$(echo "$READ" | awk '{print $1}')
+          if [[ -z "$TASK_ID" ]]; then TASK_ID="$PP_TASK"; echo "task_id не передан — взят из preprod: $TASK_ID"; fi
           PP_IMAGE=$(echo "$READ" | awk '{print $2}')
           echo "Preprod: задача '$PP_TASK', образ '$PP_IMAGE'"
           [[ "$PP_TASK" == "$TASK_ID" && "$PP_IMAGE" == "$IMAGE_TAG" ]] \
