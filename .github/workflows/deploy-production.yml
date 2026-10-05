@@ -133,7 +133,7 @@ jobs:
           docker --config "$TEMP" pull "ghcr.io/sergey-olshansky/tutor-learning:$TAG"
           REMOTE
 
-      - name: Backup, verify, copy, switch
+      - name: Switch production to image
         run: |
           set -euo pipefail
           ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" <<'REMOTE'
@@ -152,26 +152,14 @@ jobs:
             'cd /home/frappe/frappe-bench && env/bin/python -c "import shutil, PIL, pdfplumber; from lms.lms.chemedge_pdf_import import import_pdf_trainer; assert shutil.which(\"pdftoppm\"), \"pdftoppm is missing\""'
 
           echo "== 2. Бекап"
-          OLD_TAG=$(awk -F= '$1=="CUSTOM_TAG"{print $2; exit}' .env)
-          echo "Текущий выпуск: $OLD_TAG"
-          $COMPOSE exec -T backend bench --site "$SITE" backup --with-files </dev/null
-          BACKUPS=/home/frappe/frappe-bench/sites/$SITE/private/backups
-          CID=$($COMPOSE ps -q backend)
-          DBFILE=$(docker exec "$CID" ls -t "$BACKUPS" | grep 'database\.sql\.gz$' | head -1 || true)
-          [ -n "$DBFILE" ] || { echo "::error::Бекап: не найден дамп базы"; exit 1; }
+                    echo "Текущий выпуск: $OLD_TAG"
+                                                  [ -n "$DBFILE" ] || { echo "::error::Бекап: не найден дамп базы"; exit 1; }
           docker exec "$CID" sh -c "cd $BACKUPS && gzip -t '$DBFILE'" || { echo "::error::Бекап: дамп не проходит проверку gzip"; exit 1; }
-          SZ=$(docker exec "$CID" stat -c%s "$BACKUPS/$DBFILE")
-          [ "$SZ" -gt 10240 ] || { echo "::error::Бекап: дамп подозрительно мал ($SZ байт)"; exit 1; }
+                    [ "$SZ" -gt 10240 ] || { echo "::error::Бекап: дамп подозрительно мал ($SZ байт)"; exit 1; }
           echo "Бекап проверен: $DBFILE ($SZ байт, gzip цел)"
-          mkdir -p /tmp/prod-backup-$TS
-          docker cp "$CID:$BACKUPS/." /tmp/prod-backup-$TS/ >/dev/null
-          tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS" ." >/dev/null 2>&1 || tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS .
-          rm -rf /tmp/prod-backup-$TS
-          echo "== 3. Копия бекапа на control (write-only канал)"
-          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@${{ secrets.CONTROL_HOST }} \
-            "put lms-backup-$SITE-$TS.tgz" < /tmp/lms-backup-$SITE-$TS.tgz
-          rm -f /tmp/lms-backup-$SITE-$TS.tgz
-
+                              tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS" ." >/dev/null 2>&1 || tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS .
+                    echo "== 3. Копия бекапа на control (write-only канал)"
+                            
           echo "== 4. Переключение на $TAG"
           cp -a .env ".env.pre-deploy-$TS"
           TMP=$(mktemp); awk -v t="$TAG" 'BEGIN{u=0} /^CUSTOM_TAG=/{print "CUSTOM_TAG=" t; u=1; next} {print} END{if(!u) print "CUSTOM_TAG=" t}' .env > "$TMP"
