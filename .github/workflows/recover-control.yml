@@ -1,0 +1,49 @@
+name: Recover Control Gateway
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: recover-control
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Подготовка и запуск восстановления
+        env:
+          CONTROL_KEY: ${{ secrets.CONTROL_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+          cat > /tmp/on-control.sh <<'SCRIPT'
+          set -Eeuo pipefail
+          python3 - <<'PYEOF'
+          path = "/opt/openclaw/.config/systemd/user/openclaw-gateway.service"
+          s = open(path).read()
+          if "Restart=always" not in s:
+              s = s.replace("[Service]", "[Service]\nRestart=always\nRestartSec=10", 1)
+              open(path, "w").write(s)
+              print("unit: Restart=always добавлен")
+          else:
+              print("unit: Restart уже есть")
+          PYEOF
+          sudo -u openclaw -H bash -c 'cd /opt/openclaw && XDG_RUNTIME_DIR=/run/user/1500 systemctl --user daemon-reload && XDG_RUNTIME_DIR=/run/user/1500 systemctl --user restart openclaw-gateway.service'
+          sleep 20
+          systemctl --user -M openclaw@ is-active openclaw-gateway.service
+          ss -tln | grep 18789 || echo "ПОРТ НЕ СЛУШАЕТ"
+          free -h | head -2
+          SCRIPT
+
+          printf '%s' "$CONTROL_KEY" | ssh root@135.106.161.70 'install -m 600 /dev/null /root/.ssh/to-control && cat > /root/.ssh/to-control'
+          ssh root@135.106.161.70 'cat > /root/on-control.sh && chmod 700 /root/on-control.sh' < /tmp/on-control.sh
+          ssh root@135.106.161.70 'PP="J5IEXRxgvJHYnCC2HU8k" ssh -i /root/.ssh/to-control -o BatchMode=yes -o ConnectTimeout=30 -o ProxyCommand="python3 /tmp/socks5h.py %h %p" root@135.106.196.249 bash -s < /root/on-control.sh'
