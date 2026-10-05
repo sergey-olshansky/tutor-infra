@@ -203,6 +203,68 @@ jobs:
           [[ "$code" == "200" ]] || { echo "::error::Сайт не отвечает после выпуска (код $code)"; exit 1; }
           echo "Сайт отвечает 200"
 
+
+  post-release:
+    name: Релизный бот: тег released/* и закрытие PR
+    needs: [preflight, deploy]
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Токен GitHub App
+        id: app
+        env:
+          APP_ID: ${{ secrets.GHA_APP_ID }}
+          APP_INSTALL: ${{ secrets.GHA_APP_INSTALLATION_ID }}
+          APP_PEM: ${{ secrets.GHA_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$APP_PEM" > /tmp/app.pem
+          TOKEN=$(python3 - <<'PYEOF'
+          import json, subprocess, time, base64, os, urllib.request
+          pem = "/tmp/app.pem"; app_id = os.environ["APP_ID"]; inst = os.environ["APP_INSTALL"]
+          def b64u(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+          h = b64u(json.dumps({"alg":"RS256","typ":"JWT"}).encode())
+          p = b64u(json.dumps({"iat": int(time.time())-60, "exp": int(time.time())+240, "iss": app_id}).encode())
+          sig = subprocess.run(["openssl","dgst","-sha256","-sign",pem], input=f"{h}.{p}".encode(), capture_output=True).stdout
+          jwt = f"{h}.{p}.{b64u(sig)}"
+          req = urllib.request.Request(f"https://api.github.com/app/installations/{inst}/access_tokens", method="POST",
+              headers={"Authorization": f"Bearer {jwt}", "Accept": "application/vnd.github+json"})
+          print(json.load(urllib.request.urlopen(req))["token"])
+          PYEOF
+          )
+          rm -f /tmp/app.pem
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Двинуть тег released/<дата> и закрыть PR задачи
+        env:
+          GH_APP_TOKEN: ${{ steps.app.outputs.token }}
+          SHA: ${{ needs.preflight.outputs.lms_sha }}
+          TASK_ID: ${{ inputs.task_id }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -uo pipefail
+          export GH_TOKEN="$GH_APP_TOKEN"
+          TAG="released/$(date -u +%F)"
+          if git mktag() { :; } 2>/dev/null; then :; fi
+          # аннотированный тег через API
+          TAGOBJ=$(gh api -X POST repos/sergey-olshansky/lms/git/tags -f tag="$TAG"             -f message="Выпуск задачи #$TASK_ID (образ $IMAGE_TAG) — релизный бот"             -f object="$SHA" -f type=commit --jq .sha 2>/dev/null) || TAGOBJ=""
+          if [ -n "$TAGOBJ" ]; then
+            REF="refs/tags/$TAG"
+            if gh api repos/sergey-olshansky/lms/git/refs/"$TAG" >/dev/null 2>&1; then
+              gh api -X PATCH repos/sergey-olshansky/lms/git/refs/"$TAG" -f sha="$TAGOBJ" -F force=true >/dev/null && echo "Тег $TAG сдвинут на $SHA"
+            else
+              gh api -X POST repos/sergey-olshansky/lms/git/refs -f ref="$REF" -f sha="$TAGOBJ" >/dev/null && echo "Тег $TAG создан на $SHA"
+            fi
+          else
+            echo "::warning::Не удалось создать тег (проверьте права GitHub App: Contents write). Тег нужно двинуть вручную на $SHA"
+          fi
+          PR=$(gh pr list -R sergey-olshansky/lms --head "task/$TASK_ID" --json number --jq '.[0].number' 2>/dev/null) || PR=""
+          if [ -n "$PR" ]; then
+            gh pr close "$PR" -R sergey-olshansky/lms --comment "Выпущено в production (образ $IMAGE_TAG). PR закрывается без объединения по правилам процесса."               && echo "PR #$PR закрыт"
+          else
+            echo "PR для task/$TASK_ID не найден (возможно, уже закрыт)"
+          fi
+
   report:
     name: Отчёт и журнал
     needs: deploy
@@ -223,8 +285,6 @@ jobs:
           git commit -qm "release: task #${{ inputs.task_id }} -> ${{ inputs.image_tag }}" || true
           git push -q origin main
           echo "Записано: $LINE"
-          echo ""
-          echo "ПОСЛЕДНИЙ ШАГ (руками или агентом): двигните тег released/<дата> на commit ${{ needs.preflight.outputs.lms_sha }} в lms и закройте PR задачи."
 
       - name: Отчёт в Telegram (чат Edu_project)
         if: ${{ always() }}
