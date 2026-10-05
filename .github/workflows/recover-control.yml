@@ -50,6 +50,6 @@ jobs:
           free -h | head -2
           SCRIPT
 
-          printf '%s\n' "$CONTROL_KEY" | ssh root@135.106.161.70 'install -m 600 /dev/null /root/.ssh/to-control && cat > /root/.ssh/to-control'
-          ssh root@135.106.161.70 'cat > /root/on-control.sh && chmod 700 /root/on-control.sh' < /tmp/on-control.sh
-          ssh root@135.106.161.70 'PP="J5IEXRxgvJHYnCC2HU8k" ssh -i /root/.ssh/to-control -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ProxyCommand="python3 /tmp/socks5h.py %h %p" root@135.106.196.249 bash -s < /root/on-control.sh'
+          printf '%s\n' "$CONTROL_KEY" | ssh root@${{ secrets.PREPROD_HOST }} 'install -m 600 /dev/null /root/.ssh/to-control && cat > /root/.ssh/to-control'
+          ssh root@${{ secrets.PREPROD_HOST }} 'cat > /root/on-control.sh && chmod 700 /root/on-control.sh' < /tmp/on-control.sh
+          ssh root@${{ secrets.PREPROD_HOST }} 'PP="${{ secrets.SOCKS_PASSWORD }}" ssh -i /root/.ssh/to-control -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ProxyCommand="python3 /tmp/socks5h.py %h %p" root@${{ secrets.CONTROL_HOST }} bash -s < /root/on-control.sh'

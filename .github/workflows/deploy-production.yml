@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   preflight:
-    name: Preflight (проверки перед выпуском)
+    name: Preflight
     runs-on: ubuntu-latest
     outputs:
       lms_sha: ${{ steps.resolve.outputs.lms_sha }}
@@ -37,13 +37,13 @@ jobs:
       IMAGE_TAG: ${{ inputs.image_tag }}
       TASK_ID: ${{ inputs.task_id }}
     steps:
-      - name: Формат тега
+      - name: Validate tag format
         run: |
           set -euo pipefail
           [[ "$IMAGE_TAG" =~ ^lms-[0-9a-f]{8}-infra-[0-9a-f]{8}$ ]] || { echo "::error::Тег должен быть вида lms-<sha8>-infra-<sha8>"; exit 1; }
           echo "Тег корректен: $IMAGE_TAG"
 
-      - name: Образ существует в GHCR
+      - name: Image exists in GHCR
         run: |
           set -euo pipefail
           echo "${GH_TOKEN}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -51,7 +51,7 @@ jobs:
             || { echo "::error::Образ не найден в GHCR"; exit 1; }
           echo "Образ найден"
 
-      - name: CI коммита зелёный
+      - name: CI checks green
         id: resolve
         run: |
           set -euo pipefail
@@ -64,7 +64,7 @@ jobs:
           [[ "$BAD" == "0" ]] || { echo "::error::У коммита $SHA есть незелёные проверки ($BAD)"; exit 1; }
           echo "CI коммита $SHA зелёный"
 
-      - name: Образ сейчас стоит на preprod (крест-проверка)
+      - name: Cross-check preprod state
         id: ptask
         env:
           PREPROD_KEY: ${{ secrets.PREPROD_SSH_KEY }}
@@ -75,7 +75,7 @@ jobs:
           install -m 600 /dev/null ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_SSH_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PREPROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          READ=$(ssh root@135.106.161.70 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
+          READ=$(ssh root@${{ secrets.PREPROD_HOST }} 'cat /srv/tutor/frappe_docker/.preprod-task 2>/dev/null' | tr '\n' ' ')
           PP_TASK=$(echo "$READ" | awk '{print $1}')
           if [[ -z "$TASK_ID" ]]; then TASK_ID="$PP_TASK"; echo "task_id не передан — взят из preprod: $TASK_ID"; fi
           echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
@@ -89,7 +89,7 @@ jobs:
           fi
           echo "Крест-проверка: пропущена по правилу владельца (любой тег)"
 
-      - name: Итог префлайта
+      - name: Preflight summary
         run: |
           echo "=============================================="
           echo " Задача:   Vikunja #${TASK_ID}"
@@ -102,7 +102,7 @@ jobs:
           fi
 
   deploy:
-    name: Деплой (нужно подтверждение одного из двух)
+    name: Deploy
     needs: preflight
     if: ${{ !inputs.dry_run }}
     environment: production
@@ -119,12 +119,12 @@ jobs:
           install -m 600 /dev/null ~/.ssh/id_ed25519
           echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          ssh -o BatchMode=yes root@139.100.236.90 'echo соединение установлено'
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} 'echo соединение установлено'
 
-      - name: Скачать образ на production (токен не сохраняется)
+      - name: Pull image to production
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes root@139.100.236.90 bash -s -- "$IMAGE_TAG" "$GHCR_TOKEN" <<'REMOTE'
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" "$GHCR_TOKEN" <<'REMOTE'
           set -Eeuo pipefail
           TAG="$1"; TOKEN="$2"
           TEMP=$(mktemp -d /tmp/tutor-ghcr.XXXXXX)
@@ -133,15 +133,15 @@ jobs:
           docker --config "$TEMP" pull "ghcr.io/sergey-olshansky/tutor-learning:$TAG"
           REMOTE
 
-      - name: Бекап с проверкой + копия на control + переключение
+      - name: Backup, verify, copy, switch
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes root@139.100.236.90 bash -s -- "$IMAGE_TAG" <<'REMOTE'
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$IMAGE_TAG" <<'REMOTE'
           set -Eeuo pipefail
           TAG="$1"
           cd /srv/tutor/frappe_docker
           COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
-          SITE="learn.vladastay.ru"
+          SITE="${PROD_SITE_SECRET}"
           IMAGE="ghcr.io/sergey-olshansky/tutor-learning"
           SERVICES="backend frontend websocket scheduler queue-short queue-long"
           TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -168,7 +168,7 @@ jobs:
           tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS" ." >/dev/null 2>&1 || tar czf /tmp/lms-backup-$SITE-$TS.tgz -C /tmp/prod-backup-$TS .
           rm -rf /tmp/prod-backup-$TS
           echo "== 3. Копия бекапа на control (write-only канал)"
-          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@135.106.196.249 \
+          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@${{ secrets.CONTROL_HOST }} \
             "put lms-backup-$SITE-$TS.tgz" < /tmp/lms-backup-$SITE-$TS.tgz
           rm -f /tmp/lms-backup-$SITE-$TS.tgz
 
@@ -200,11 +200,11 @@ jobs:
           echo "PROD_SWITCH_OK"
           REMOTE
 
-      - name: Проверка сайта
+      - name: Site health check
         run: |
           set -euo pipefail
           for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://learn.vladastay.ru/lms || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 ${{ secrets.PROD_URL }} || true)
             [[ "$code" == "200" ]] && break
             sleep 3
           done
@@ -213,12 +213,12 @@ jobs:
 
 
   post-release:
-    name: "Релизный бот — тег released/* и закрытие PR"
+    name: "Post-release: tag and PR"
     needs: [preflight, deploy]
     if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Токен GitHub App
+      - name: Mint GitHub App token
         id: app
         env:
           APP_ID: ${{ secrets.GHA_APP_ID }}
@@ -243,7 +243,7 @@ jobs:
           rm -f /tmp/app.pem
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Двинуть тег released/<дата> и закрыть PR задачи
+      - name: Move released tag and close PR
         env:
           GH_APP_TOKEN: ${{ steps.app.outputs.token }}
           SHA: ${{ needs.preflight.outputs.lms_sha }}
@@ -274,12 +274,12 @@ jobs:
           fi
 
   report:
-    name: Отчёт и журнал
+    name: Reports
     needs: deploy
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Запись в releases.log
+      - name: Append to releases.log
         if: ${{ needs.deploy.result == 'success' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -296,7 +296,7 @@ jobs:
           git push -q origin main
           echo "Записано: $LINE"
 
-      - name: Отчёт в Telegram (чат Edu_project)
+      - name: Telegram notification
         if: ${{ always() }}
         env:
           TG_TOKEN: ${{ secrets.RELEASE_TG_BOT_TOKEN }}
@@ -314,6 +314,6 @@ jobs:
             "Образ: ${{ inputs.image_tag }}" \
             "Commit: ${{ needs.preflight.outputs.lms_sha }}" \
             "Кто подтвердил: ${{ github.actor }}" \
-            "Сайт: https://learn.vladastay.ru/lms")
+            "Сайт: ${{ secrets.PROD_URL }}")
           curl -s --max-time 20 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d chat_id="$TG_CHAT" -d text="$MSG" >/dev/null || echo "(telegram недоступен с раннера — не критично)"
