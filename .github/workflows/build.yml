@@ -1,8 +1,17 @@
 name: Build Tutor Learning
+run-name: "build-${{ inputs.request_id }}-${{ inputs.lms_sha }}"
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: "Unique dispatch correlation ID"
+        required: false
+        type: string
+      lms_sha:
+        description: "Exact LMS commit to build (40 lowercase hex)"
+        required: false
+        type: string
       lms_branch:
         description: "Ветка LMS для сборки (по умолчанию tutor-main). Tip ветки фиксируется в теге образа."
         required: false
@@ -46,6 +55,7 @@ jobs:
         shell: bash
         env:
           REQUESTED_BRANCH: ${{ inputs.lms_branch }}
+          REQUESTED_SHA: ${{ inputs.lms_sha }}
         run: |
           set -euo pipefail
           BRANCH="${REQUESTED_BRANCH:-tutor-main}"
@@ -53,18 +63,28 @@ jobs:
             echo "Invalid branch name: $BRANCH" >&2
             exit 1
           fi
-          LMS_SHA=$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$BRANCH" | awk '{print $1}')
+          LMS_SHA="${REQUESTED_SHA:-$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$BRANCH" | awk '{print $1}')}"
           if [[ ! "$LMS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Could not resolve branch $BRANCH" >&2
             exit 1
           fi
           echo "LMS_BRANCH=$BRANCH" >> "$GITHUB_ENV"
           echo "LMS_SHA=$LMS_SHA" >> "$GITHUB_ENV"
-          #apps.json этой сборки указывает на выбранную ветку, а не на зашитую tutor-main
-          jq --arg url "https://github.com/sergey-olshansky/lms" --arg branch "$BRANCH" \
-            '.[1] = {url: $url, branch: $branch}' apps.json > apps.build.json
+          # Materialize the exact commit into the Docker context. bench init clones
+          # this local repository, so a moving remote branch cannot change bytes.
+          mkdir -p frappe_docker/pinned-lms
+          curl --fail --location --silent --show-error \
+            "https://api.github.com/repos/sergey-olshansky/lms/tarball/$LMS_SHA" \
+            | tar -xz --strip-components=1 -C frappe_docker/pinned-lms
+          git -C frappe_docker/pinned-lms init -q
+          git -C frappe_docker/pinned-lms config user.name build-pin
+          git -C frappe_docker/pinned-lms config user.email build-pin@users.noreply.github.com
+          git -C frappe_docker/pinned-lms add -A
+          git -C frappe_docker/pinned-lms commit -qm "Snapshot LMS $LMS_SHA"
+          git -C frappe_docker/pinned-lms branch -M pinned
+          jq --arg url "file:///opt/frappe/pinned-lms" \
+            '.[1] = {url: $url, branch: "pinned"}' apps.json > apps.build.json
           mv apps.build.json apps.json
-          cat apps.json
 
       - name: Set image variables
         shell: bash
@@ -77,7 +97,7 @@ jobs:
           # Task images and production candidates have separate, non-overlapping formats.
           if [[ "$LMS_BRANCH" == tutor-main ]]; then
             [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Production images require infra main" >&2; exit 1; }
-            IMMUTABLE_TAG="lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}"
+            IMMUTABLE_TAG="lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           elif [[ "$LMS_BRANCH" =~ ^task/([0-9]+)$ ]]; then
             IMMUTABLE_TAG="task-${BASH_REMATCH[1]}-lms-${LMS_SHA:0:12}-infra-${GITHUB_SHA:0:12}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           else
@@ -133,7 +153,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify branch tip did not move during the build
+      - name: Verify requested commit remains branch tip
         shell: bash
         run: |
           set -euo pipefail

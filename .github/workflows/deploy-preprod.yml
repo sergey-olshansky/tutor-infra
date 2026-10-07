@@ -1,8 +1,13 @@
 name: Deploy to Preprod
+run-name: "preprod-${{ inputs.request_id }}-${{ inputs.image_tag }}"
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: "Unique dispatch correlation ID"
+        required: false
+        type: string
       image_tag:
         description: "Временный тег task-<N>-lms-<sha12>-infra-<sha12>-run-<id>-<attempt> из Build"
         required: true

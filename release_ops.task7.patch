@@ -1,27 +1,156 @@
 --- /opt/release-ops/release_ops.py	2026-10-06 00:13:00.353152892 +0000
-+++ /tmp/release_ops.task7.py	2026-10-07 11:54:23.213074302 +0000
-@@ -147,9 +147,9 @@
++++ release_ops.task7.py	2026-10-07 12:09:39.520405744 +0000
+@@ -62,20 +62,30 @@
+     return curl(f"https://api.github.com/repos/{REPO}/actions/workflows/{wf}/dispatches", "POST", body,
+                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+ 
+-def runs(token, wf):
+-    return curl(f"https://api.github.com/repos/{REPO}/actions/workflows/{wf}/runs?per_page=1",
+-                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+-
+-def wait_run(token, wf, created_after, timeout=1800):
++def wait_run(token, wf, request_id, head_sha, branch, timeout=1800):
++    """Find only this dispatch, including reruns; never accept another run."""
+     t0 = time.time()
++    prefix = {"build.yml": "build", "deploy-preprod.yml": "preprod",
++              "deploy-production.yml": "production"}[wf]
+     while time.time() - t0 < timeout:
+-        rr = runs(token, wf).get("workflow_runs", [])
+-        if rr and rr[0]["created_at"] > created_after:
+-            status, concl = rr[0]["status"], rr[0]["conclusion"]
+-            if status == "completed":
+-                return concl, rr[0]["id"], rr[0]["html_url"]
++        result = curl(f"https://api.github.com/repos/{REPO}/actions/workflows/{wf}/runs?event=workflow_dispatch&per_page=100",
++                      headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
++        for run in result.get("workflow_runs", []):
++            if (run.get("display_title", "").startswith(f"{prefix}-{request_id}-")
++                    and run.get("head_sha") == head_sha
++                    and run.get("head_branch") == branch
++                    and run.get("event") == "workflow_dispatch"
++                    and run.get("run_attempt") == 1):
++                if run["status"] == "completed":
++                    return run["conclusion"], run["id"], run["html_url"], run["run_attempt"]
+         time.sleep(20)
+-    return "timeout", None, None
++    return "timeout", None, None, None
++
++
++def infra_main_sha(token):
++    result = curl(f"https://api.github.com/repos/{REPO}/git/ref/heads/main",
++                  headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
++    return result.get("object", {}).get("sha")
+ 
+ 
+ def handle_backup():
+@@ -116,7 +126,7 @@
+     tg_send(f"\u2705 \u0410\u0440\u0445\u0438\u0432 {total_mb} MB ({n} \u0447.) \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d")
+     sh(["bash","-c",f"rm -rf {TMP} {ZIP} {ZIP}.part-*"])
+ 
+-TAG_RE = re.compile(r"\b(lms-[0-9a-f]{8}-infra-[0-9a-f]{8})\b")
++TAG_RE = re.compile(r"\b(lms-[0-9a-f]{8}-infra-[0-9a-f]{8}-run-[0-9]+-[0-9]+)\b")
+ BOT_MENTION_RE = re.compile(r"(?i)@edu_lms_release_bot\b")
+ RELEASE_COMMAND_RE = re.compile(r"(?i)^/?(?:release|tag|релиз|выпусти)\b")
+ BACKUP_COMMAND_RE = re.compile(r"(?i)^/?(?:backup|бэкап|резервная\s+копия)\s*[.!]?$")
+@@ -127,46 +137,58 @@
+     except Exception as e:
+         tg_send(f"❌ {e}"); return
+     tg_send(f"Перед выпуском {tag} создаю обязательный бекап. Без сохранённого архива deploy не начнётся.")
+-    before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+-    r = dispatch(token, "deploy-production.yml", {"image_tag": tag, "task_id": "", "dry_run": "false"})
++    infra_sha = infra_main_sha(token)
++    request_id = secrets.token_hex(12)
++    r = dispatch(token, "deploy-production.yml", {"image_tag": tag, "task_id": "", "dry_run": "false", "request_id": request_id})
+     if r.get("_err") or r.get("message"):
+         tg_send(f"❌ Не удалось запустить: {json.dumps(r)[:200]}"); return
+-    concl, rid, url = wait_run(token, "deploy-production.yml", before, timeout=2700)
++    concl, rid, url, attempt = wait_run(token, "deploy-production.yml", request_id, infra_sha, "main", timeout=2700)
+     if concl == "success":
+         tg_send(f"✅ Выпуск {tag} завершён. Сайт: https://learn.vladastay.ru/lms")
+     else:
+         tg_send(f"❌ Выпуск не завершён ({concl}). Лог: {url or 'недоступен'}")
+ 
+ def pipeline(task_id):
+-    """build -> deploy-preprod -> rotate temporary Administrator credentials."""
++    """Build an exact LMS commit, deploy its uniquely correlated image to preprod."""
+     try: token = gh_token()
+     except Exception as e:
+         return {"ok": False, "error": str(e)[:300]}
+-    sha = curl("https://api.github.com/repos/sergey-olshansky/lms/git/ref/heads/" + task_id if task_id.startswith("task/") else f"https://api.github.com/repos/sergey-olshansky/lms/git/ref/heads/task/{task_id}")
+     branch = task_id if task_id.startswith("task/") else f"task/{task_id}"
++    if not re.fullmatch(r"task/[0-9]+", branch):
++        return {"ok": False, "error": "требуется task/<номер>"}
++    task_number = branch.split("/")[1]
      sha = curl(f"https://api.github.com/repos/sergey-olshansky/lms/git/ref/heads/{branch}")
-     if not sha.get("object"):
+-    if not sha.get("object"):
++    lms_sha = sha.get("object", {}).get("sha")
++    if not lms_sha or not re.fullmatch(r"[0-9a-f]{40}", lms_sha):
          return {"ok": False, "error": f"ветка {branch} не найдена"}
 -    sha8 = sha["object"]["sha"][:8]
-+    sha12 = sha["object"]["sha"][:12]
-     before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+-    before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
 -    r = dispatch(token, "build.yml", {"lms_branch": branch})
-+    r = dispatch(token, "build.yml", {"lms_branch": branch, "frappe_branch": "develop"})
++    infra_sha = infra_main_sha(token)
++    # The workflow and bot contract must be deployed together. PR workflows can
++    # be tested at their branch SHA, but /pipeline dispatches main only after merge.
++    REQUIRED_INFRA_SHA = "REPLACE_WITH_MERGED_INFRA_SHA"
++    if infra_sha != REQUIRED_INFRA_SHA:
++        return {"ok": False, "error": f"infra main {infra_sha} не равен одобренному {REQUIRED_INFRA_SHA}; конвейер не активирован"}
++    request_id = secrets.token_hex(12)
++    r = dispatch(token, "build.yml", {"lms_branch": branch, "lms_sha": lms_sha,
++                                       "frappe_branch": "develop", "request_id": request_id})
      if r.get("message"):
          return {"ok": False, "error": f"build dispatch: {json.dumps(r)[:200]}"}
-     concl, rid, url = wait_run(token, "build.yml", before, timeout=1800)
-@@ -157,9 +157,10 @@
+-    concl, rid, url = wait_run(token, "build.yml", before, timeout=1800)
++    concl, rid, url, attempt = wait_run(token, "build.yml", request_id, infra_sha, "main", timeout=1800)
+     if concl != "success":
          return {"ok": False, "error": f"сборка {concl}: {url}"}
-     versions = curl(f"https://api.github.com/user/packages/container/tutor-learning/versions?per_page=15",
+-    versions = curl(f"https://api.github.com/user/packages/container/tutor-learning/versions?per_page=15",
++    tag = f"task-{task_number}-lms-{lms_sha[:12]}-infra-{infra_sha[:12]}-run-{rid}-{attempt}"
++    versions = curl("https://api.github.com/user/packages/container/tutor-learning/versions?per_page=100",
                      headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
 -    tag = next((t for v in versions for t in v.get("metadata", {}).get("container", {}).get("tags", []) if f"-{sha8}-infra-" in t), None)
-+    prefix = f"task-{branch.split('/')[1]}-lms-{sha12}-infra-"
-+    tag = next((t for v in versions for t in v.get("metadata", {}).get("container", {}).get("tags", []) if t.startswith(prefix) and f"-run-{rid}-" in t), None)
-     if not tag:
+-    if not tag:
 -        return {"ok": False, "error": f"тег с {sha8} не найден в GHCR"}
-+        return {"ok": False, "error": f"тег сборки {rid} для {sha12} не найден в GHCR"}
-     before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
-     r = dispatch(token, "deploy-preprod.yml", {"image_tag": tag, "task_id": branch.split("/")[1]})
+-    before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+-    r = dispatch(token, "deploy-preprod.yml", {"image_tag": tag, "task_id": branch.split("/")[1]})
++    if not any(tag in v.get("metadata", {}).get("container", {}).get("tags", []) for v in versions):
++        return {"ok": False, "error": f"тег сборки {rid} не найден в GHCR: {tag}"}
++    preprod_request = secrets.token_hex(12)
++    r = dispatch(token, "deploy-preprod.yml", {"image_tag": tag, "task_id": task_number,
++                                                 "request_id": preprod_request})
      if r.get("message"):
+         return {"ok": False, "error": f"preprod dispatch: {json.dumps(r)[:200]}"}
+-    concl, rid, url = wait_run(token, "deploy-preprod.yml", before, timeout=2400)
++    concl, deploy_id, deploy_url, deploy_attempt = wait_run(token, "deploy-preprod.yml", preprod_request,
++                                                             infra_sha, "main", timeout=2400)
+     if concl != "success":
+-        return {"ok": False, "error": f"preprod {concl}: {url}"}
++        return {"ok": False, "error": f"preprod {concl}: {deploy_url}"}
+     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_"
+     password = "".join(secrets.choice(alphabet) for _ in range(24))
+     compose = "docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor"
+@@ -179,13 +201,9 @@
+              f"UserKnownHostsFile={PREPROD_KNOWN_HOSTS}", f"root@{PREPROD_HOST}", remote], timeout=180)
+     if rr.returncode != 0:
+         return {"ok": False, "error": "preprod выложен, но временный доступ создать не удалось"}
+-    return {
+-        "ok": True,
+-        "tag": tag,
+-        "url": ENV.get("PREPROD_URL", "http://135.106.161.70:8080/lms"),
+-        "task": branch,
+-        "credentials": {"login": "Administrator", "password": password},
+-    }
++    return {"ok": True, "tag": tag, "build_run": url, "preprod_run": deploy_url,
++            "url": ENV.get("PREPROD_URL", "http://135.106.161.70:8080/lms"),
++            "task": branch, "credentials": {"login": "Administrator", "password": password}}
+ 
+ class H(BaseHTTPRequestHandler):
+     def do_POST(self):
+@@ -225,7 +243,7 @@
+             elif RELEASE_COMMAND_RE.match(clean) and mm:
+                 threading.Thread(target=handle_tag, args=(mm.group(1),), daemon=True).start()
+             elif HELP_RE.search(clean):
+-                tg_send("Команда выпуска: release lms-<sha8>-infra-<sha8>. Упоминание @edu_lms_release_bot необязательно.")
++                tg_send("Команда выпуска: release lms-<sha8>-infra-<sha8>-run-<id>-<attempt>. Упоминание @edu_lms_release_bot необязательно.")
+ 
+ threading.Thread(target=telegram_loop, daemon=True).start()
+ HTTPServer(("127.0.0.1", 8790), H).serve_forever()

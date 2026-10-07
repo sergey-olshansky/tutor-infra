@@ -10,6 +10,8 @@ ARG FRAPPE_BRANCH=version-16
 ARG FRAPPE_PATH=https://github.com/frappe/frappe
 ARG CACHE_BUST=""
 
+COPY --chown=frappe:frappe pinned-lms /opt/frappe/pinned-lms
+
 USER frappe
 
 RUN --mount=type=secret,id=apps_json,target=/opt/frappe/apps.json,uid=1000,gid=1000 \
