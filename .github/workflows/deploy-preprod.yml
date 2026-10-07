@@ -22,9 +22,9 @@ on:
         default: false
         type: boolean
       clone_prod:
-        description: "Restore latest production data"
+        description: "Restore latest production data (default: yes)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 concurrency:
