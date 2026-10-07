@@ -111,8 +111,59 @@ jobs:
           echo "PREPROD OK"
           REMOTE
 
+      - name: Clone production data (optional)
+        if: ${{ inputs.clone_prod }}
+        run: |
+          set -euo pipefail
+          echo "Fetching backup from control..."
+          BACKUP_FILE=$(ssh -o BatchMode=yes root@${{ secrets.CONTROL_HOST }} 'ls -t /var/backups/production/lms-backup-*.tgz | head -1')
+          echo "Found: $(basename $BACKUP_FILE)"
+          scp -o BatchMode=yes root@${{ secrets.CONTROL_HOST }}:${BACKUP_FILE} /tmp/prod-backup.tgz
+          scp -o BatchMode=yes /tmp/prod-backup.tgz root@${{ secrets.PREPROD_HOST }}:/tmp/
+          rm /tmp/prod-backup.tgz
+          echo "Restoring on preprod..."
+          ssh root@${{ secrets.PREPROD_HOST }} bash -s <<'RESTORE'
+          set -Eeuo pipefail
+          cd /srv/tutor/frappe_docker
+          DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
+          DBPASS=$(grep ^DB_PASSWORD= .env | cut -d= -f2)
+          CID=$(docker ps -aq -f name=tutor-db-1)
+          BID=$(docker ps -aq -f name=tutor-backend-1)
+          echo "== Stop services"
+          DC stop backend websocket frontend scheduler queue-short queue-long 2>/dev/null || true
+          echo "== Extract backup"
+          rm -rf /tmp/restore && mkdir -p /tmp/restore
+          tar xf /tmp/prod-backup.tgz -C /tmp/restore
+          DBFILE=$(ls /tmp/restore/*database*.sql.gz | head -1)
+          echo "== Restore database"
+          docker exec -i "$CID" mysql -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;"
+          zcat "$DBFILE" | docker exec -i "$CID" mysql -uroot -p"$DBPASS" _prodclone
+          SITE_DIR=$(docker exec "$BID" ls /home/frappe/frappe-bench/sites/ | grep -v common | head -1)
+          docker exec "$BID" bash -c "cat /home/frappe/frappe-bench/sites/$SITE_DIR/site_config.json" | jq --arg db _prodclone '.db_name = $db' | docker exec -i "$BID" bash -c "cat > /home/frappe/frappe-bench/sites/$SITE_DIR/site_config.json"
+          echo "== Restore files"
+          for F in /tmp/restore/*private-files*.tar; do
+            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/ 2>/dev/null
+          done
+          for F in /tmp/restore/*files.tar; do
+            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/ 2>/dev/null
+          done
+          docker exec "$BID" mkdir -p /home/frappe/frappe-bench/sites/$SITE_DIR/private/files /home/frappe/frappe-bench/sites/$SITE_DIR/public/files
+          docker cp /tmp/restore/. "$BID":/home/frappe/frappe-bench/sites/$SITE_DIR/private/files/ 2>/dev/null || true
+          echo "== Restart"
+          rm -rf /tmp/restore /tmp/prod-backup.tgz
+          DC up -d --pull never backend websocket frontend scheduler queue-short queue-long 2>&1 | tail -3
+          sleep 40
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/api/method/ping || true)
+            [[ "$code" == "200" ]] && break
+            sleep 5
+          done
+          [[ "$code" == "200" ]] && echo "CLONE_OK" || { echo "FAILED after restore"; exit 1; }
+          RESTORE
+
       - name: Result
         run: |
           echo "Task #${{ inputs.task_id }} deployed to preprod:"
           echo "URL:   http://${{ secrets.PREPROD_HOST }}:8080"
-          echo "Образ: ghcr.io/sergey-olshansky/tutor-learning:${{ inputs.image_tag }}"
+          echo "Image: ghcr.io/sergey-olshansky/tutor-learning:${{ inputs.image_tag }}"
+          echo "Clone: ${{ inputs.clone_prod == true && 'production data restored' || 'clean' }}"
