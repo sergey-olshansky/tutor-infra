@@ -118,12 +118,24 @@ jobs:
 
       - name: Clone production data (optional)
         if: ${{ inputs.clone_prod }}
+        env:
+          CONTROL_HOST: 135.106.196.249
+          CONTROL_HOST_FINGERPRINT: SHA256:H/PR8KAwhJ/VHNV/DiB4i8SBNI3spMLr4/I5nuZpkD8
         run: |
           set -euo pipefail
+          install -m 600 /dev/null "$RUNNER_TEMP/control_key"
+          echo "${{ secrets.CONTROL_SSH_KEY }}" > "$RUNNER_TEMP/control_key"
+          ssh-keyscan -t ed25519 "$CONTROL_HOST" > "$RUNNER_TEMP/control_known_hosts" 2>/dev/null
+          ACTUAL=$(ssh-keygen -lf "$RUNNER_TEMP/control_known_hosts" -E sha256 | awk 'NR==1{print $2}')
+          [ "$ACTUAL" = "$CONTROL_HOST_FINGERPRINT" ] || { echo "::error::Не совпал host key control"; exit 1; }
+
+          SSH_CONTROL=(ssh -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
+          SCP_CONTROL=(scp -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
+
           echo "Fetching backup from control..."
-          BACKUP_FILE=$(ssh -o BatchMode=yes root@${{ secrets.CONTROL_HOST }} 'ls -t /var/backups/production/lms-backup-*.tgz | head -1')
-          echo "Found: $(basename $BACKUP_FILE)"
-          scp -o BatchMode=yes root@${{ secrets.CONTROL_HOST }}:${BACKUP_FILE} /tmp/prod-backup.tgz
+          BACKUP_FILE=$("${SSH_CONTROL[@]}" root@"$CONTROL_HOST" 'ls -t /var/backups/production/lms-backup-*.tgz | head -1')
+          echo "Found: $(basename "$BACKUP_FILE")"
+          "${SCP_CONTROL[@]}" "root@$CONTROL_HOST:$BACKUP_FILE" /tmp/prod-backup.tgz
           scp -o BatchMode=yes /tmp/prod-backup.tgz root@${{ secrets.PREPROD_HOST }}:/tmp/
           rm /tmp/prod-backup.tgz
           echo "Restoring on preprod..."
