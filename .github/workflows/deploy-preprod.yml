@@ -75,7 +75,7 @@ jobs:
           ssh root@${{ secrets.PREPROD_HOST }} bash -s <<'REMOTE'
           set -Eeuo pipefail
           cd /srv/tutor/frappe_docker
-          docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor stop backend websocket frontend scheduler queue-short
+          docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor stop backend websocket frontend scheduler queue-short queue-long
           docker image rm -f $(docker images -q ghcr.io/sergey-olshansky/tutor-learning) 2>/dev/null || true
           docker system prune -af --volumes=false >/dev/null 2>&1 || true
           rm -rf /tmp/prod-backup-* /var/tmp/* 2>/dev/null || true
@@ -97,7 +97,7 @@ jobs:
           sed -i "s/^CUSTOM_TAG=.*/CUSTOM_TAG=${IMAGE_TAG}/" .env
           printf '%s\n%s\n%s\n' "$TASK_ID" "$IMAGE_TAG" "$(date -u +%FT%TZ)" > .preprod-task
           DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
-          DC up -d --pull never backend websocket frontend scheduler queue-short 2>&1 | tail -5
+          DC up -d --pull never backend websocket frontend scheduler queue-short queue-long 2>&1 | tail -5
           sleep 25
           DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site ${{ secrets.PREPROD_SITE }} migrate" | tail -3 || true
           DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site ${{ secrets.PREPROD_SITE }} clear-cache" 2>&1 | tail -1
