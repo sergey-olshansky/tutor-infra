@@ -127,13 +127,16 @@ jobs:
           scp -o BatchMode=yes /tmp/prod-backup.tgz root@${{ secrets.PREPROD_HOST }}:/tmp/
           rm /tmp/prod-backup.tgz
           echo "Restoring on preprod..."
-          ssh root@${{ secrets.PREPROD_HOST }} bash -s <<'RESTORE'
+          ssh root@${{ secrets.PREPROD_HOST }} bash -s -- "${{ secrets.PREPROD_SITE }}" <<'RESTORE'
           set -Eeuo pipefail
+          SITE="$1"
           cd /srv/tutor/frappe_docker
           DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
           DBPASS=$(grep ^DB_PASSWORD= .env | cut -d= -f2)
           CID=$(docker ps -aq -f name=tutor-db-1)
-          BID=$(docker ps -aq -f name=tutor-backend-1)
+          SITES=$(docker volume inspect tutor_sites --format '{{.Mountpoint}}')
+          SITE_DIR="$SITES/$SITE"
+          [ -d "$SITE_DIR" ] || { echo "Site dir not found: $SITE_DIR"; exit 1; }
           echo "== Stop services"
           DC stop backend websocket frontend scheduler queue-short queue-long 2>/dev/null || true
           echo "== Extract backup"
@@ -141,25 +144,29 @@ jobs:
           tar xf /tmp/prod-backup.tgz -C /tmp/restore
           DBFILE=$(ls /tmp/restore/*database*.sql.gz | head -1)
           echo "== Restore database"
-          docker exec -i "$CID" mysql -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;"
-          zcat "$DBFILE" | docker exec -i "$CID" mysql -uroot -p"$DBPASS" _prodclone
-          SITE_DIR=$(docker exec "$BID" ls /home/frappe/frappe-bench/sites/ | grep -v common | head -1)
-          docker exec "$BID" bash -c "cat /home/frappe/frappe-bench/sites/$SITE_DIR/site_config.json" | jq --arg db _prodclone '.db_name = $db' | docker exec -i "$BID" bash -c "cat > /home/frappe/frappe-bench/sites/$SITE_DIR/site_config.json"
+          docker exec -i "$CID" mariadb -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;"
+          zcat "$DBFILE" | sed -e '/^CREATE DATABASE/d' -e '/^USE /d' | docker exec -i "$CID" mariadb -uroot -p"$DBPASS" _prodclone
+          jq --arg db _prodclone '.db_name = $db' "$SITE_DIR/site_config.json" > "$SITE_DIR/site_config.json.tmp"
+          mv "$SITE_DIR/site_config.json.tmp" "$SITE_DIR/site_config.json"
+          chown 1000:1000 "$SITE_DIR/site_config.json"
           echo "== Restore files"
+          mkdir -p /tmp/restore/files-private /tmp/restore/files-public
           for F in /tmp/restore/*private-files*.tar; do
-            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/ 2>/dev/null
+            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/files-private 2>/dev/null
           done
           for F in /tmp/restore/*files.tar; do
-            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/ 2>/dev/null
+            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/files-public 2>/dev/null
           done
-          docker exec "$BID" mkdir -p /home/frappe/frappe-bench/sites/$SITE_DIR/private/files /home/frappe/frappe-bench/sites/$SITE_DIR/public/files
-          docker cp /tmp/restore/. "$BID":/home/frappe/frappe-bench/sites/$SITE_DIR/private/files/ 2>/dev/null || true
+          mkdir -p "$SITE_DIR/private/files" "$SITE_DIR/public/files"
+          cp -a /tmp/restore/files-private/sites/*/private/files/. "$SITE_DIR/private/files/" 2>/dev/null || true
+          cp -a /tmp/restore/files-public/sites/*/public/files/. "$SITE_DIR/public/files/" 2>/dev/null || true
+          chown -R 1000:1000 "$SITE_DIR/private/files" "$SITE_DIR/public/files"
           echo "== Restart"
           rm -rf /tmp/restore /tmp/prod-backup.tgz
           DC up -d --pull never backend websocket frontend scheduler queue-short queue-long 2>&1 | tail -3
           sleep 40
           for i in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/api/method/ping || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: $SITE" http://127.0.0.1:8080/api/method/ping || true)
             [[ "$code" == "200" ]] && break
             sleep 5
           done
