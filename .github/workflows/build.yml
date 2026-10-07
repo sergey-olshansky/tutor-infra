@@ -1,15 +1,29 @@
 name: Build Tutor Learning
+run-name: "build-${{ inputs.request_id }}-${{ inputs.lms_sha }}"
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: "Unique dispatch correlation ID"
+        required: false
+        type: string
+      lms_sha:
+        description: "Exact LMS commit to build (40 lowercase hex)"
+        required: false
+        type: string
       lms_branch:
         description: "Ветка LMS для сборки (по умолчанию tutor-main). Tip ветки фиксируется в теге образа."
         required: false
         type: string
       image_tag:
-        description: "Optional tag (defaults to lms-<LMS SHA>-infra-<infra SHA>)"
+        description: "Optional additional alias (the branch/run-specific tag is always published)"
         required: false
+        type: string
+      frappe_branch:
+        description: "Frappé branch (develop matches frappe-ui rc.1)"
+        required: false
+        default: "develop"
         type: string
   push:
     branches:
@@ -41,6 +55,7 @@ jobs:
         shell: bash
         env:
           REQUESTED_BRANCH: ${{ inputs.lms_branch }}
+          REQUESTED_SHA: ${{ inputs.lms_sha }}
         run: |
           set -euo pipefail
           BRANCH="${REQUESTED_BRANCH:-tutor-main}"
@@ -48,18 +63,28 @@ jobs:
             echo "Invalid branch name: $BRANCH" >&2
             exit 1
           fi
-          LMS_SHA=$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$BRANCH" | awk '{print $1}')
+          LMS_SHA="${REQUESTED_SHA:-$(git ls-remote https://github.com/sergey-olshansky/lms "refs/heads/$BRANCH" | awk '{print $1}')}"
           if [[ ! "$LMS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Could not resolve branch $BRANCH" >&2
             exit 1
           fi
           echo "LMS_BRANCH=$BRANCH" >> "$GITHUB_ENV"
           echo "LMS_SHA=$LMS_SHA" >> "$GITHUB_ENV"
-          #apps.json этой сборки указывает на выбранную ветку, а не на зашитую tutor-main
-          jq --arg url "https://github.com/sergey-olshansky/lms" --arg branch "$BRANCH" \
-            '.[1] = {url: $url, branch: $branch}' apps.json > apps.build.json
+          # Materialize the exact commit into the Docker context. bench init clones
+          # this local repository, so a moving remote branch cannot change bytes.
+          mkdir -p frappe_docker/pinned-lms
+          curl --fail --location --silent --show-error \
+            "https://api.github.com/repos/sergey-olshansky/lms/tarball/$LMS_SHA" \
+            | tar -xz --strip-components=1 -C frappe_docker/pinned-lms
+          git -C frappe_docker/pinned-lms init -q
+          git -C frappe_docker/pinned-lms config user.name build-pin
+          git -C frappe_docker/pinned-lms config user.email build-pin@users.noreply.github.com
+          git -C frappe_docker/pinned-lms add -A
+          git -C frappe_docker/pinned-lms commit -qm "Snapshot LMS $LMS_SHA"
+          git -C frappe_docker/pinned-lms branch -M pinned
+          jq --arg url "file:///opt/frappe/pinned-lms" \
+            '.[1] = {url: $url, branch: "pinned"}' apps.json > apps.build.json
           mv apps.build.json apps.json
-          cat apps.json
 
       - name: Set image variables
         shell: bash
@@ -67,14 +92,35 @@ jobs:
           REQUESTED_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          TAG=${REQUESTED_TAG:-lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}}
-          if [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            echo "Invalid image tag: $TAG" >&2
+          BRANCH_SLUG=$(printf '%s' "$LMS_BRANCH" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[^a-z0-9]+//; s/[^a-z0-9]+$//' | cut -c1-40)
+          [[ -n "$BRANCH_SLUG" ]] || { echo "Invalid branch slug" >&2; exit 1; }
+          # Task images and production candidates have separate, non-overlapping formats.
+          if [[ "$LMS_BRANCH" == tutor-main ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Production images require infra main" >&2; exit 1; }
+            IMMUTABLE_TAG="lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          elif [[ "$LMS_BRANCH" =~ ^task/([0-9]+)$ ]]; then
+            IMMUTABLE_TAG="task-${BASH_REMATCH[1]}-lms-${LMS_SHA:0:12}-infra-${GITHUB_SHA:0:12}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            echo "Only tutor-main or task/<number> can be built" >&2
             exit 1
           fi
-
-          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tutor-learning" >> "$GITHUB_ENV"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tutor-learning"
+          TAGS="${IMAGE}:${IMMUTABLE_TAG}"
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            echo "Additional aliases are not allowed for release images" >&2
+            exit 1
+          fi
+          # Only an accepted change merged to main may refresh the production-facing alias.
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            TAGS+=$'\n'"${IMAGE}:main"
+          fi
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "TAG=$IMMUTABLE_TAG" >> "$GITHUB_ENV"
+          {
+            echo 'TAGS<<EOF'
+            echo "$TAGS"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -94,13 +140,11 @@ jobs:
           platforms: linux/amd64
           push: true
 
-          tags: |
-            ${{ env.IMAGE }}:${{ env.TAG }}
-            ${{ env.IMAGE }}:main
+          tags: ${{ env.TAGS }}
 
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
-            FRAPPE_BRANCH=version-16
+            FRAPPE_BRANCH=${{ inputs.frappe_branch || 'develop' }}
             CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}-${{ env.LMS_SHA }}
 
           secret-files: |
@@ -109,7 +153,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify branch tip did not move during the build
+      - name: Verify requested commit remains branch tip
         shell: bash
         run: |
           set -euo pipefail

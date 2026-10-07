@@ -1,10 +1,15 @@
 name: Deploy to Production
+run-name: "production-${{ inputs.request_id }}-${{ inputs.image_tag }}"
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: "Unique dispatch correlation ID"
+        required: false
+        type: string
       image_tag:
-        description: "Неизменяемый тег образа (lms-<sha8>-infra-<sha8>), проверенный на preprod"
+        description: "Неизменяемый тег образа (lms-<sha8>-infra-<sha8>-run-<id>-<attempt>), проверенный на preprod"
         required: true
         type: string
       task_id:
@@ -40,7 +45,7 @@ jobs:
       - name: Validate tag format
         run: |
           set -euo pipefail
-          [[ "$IMAGE_TAG" =~ ^lms-[0-9a-f]{8}-infra-[0-9a-f]{8}$ ]] || { echo "::error::Тег должен быть вида lms-<sha8>-infra-<sha8>"; exit 1; }
+          [[ "$IMAGE_TAG" =~ ^lms-[0-9a-f]{8}-infra-[0-9a-f]{8}-run-[0-9]+-[0-9]+$ ]] || { echo "::error::Тег должен быть вида lms-<sha8>-infra-<sha8>-run-<id>-<attempt>"; exit 1; }
           echo "Тег корректен: $IMAGE_TAG"
 
       - name: Image exists in GHCR
