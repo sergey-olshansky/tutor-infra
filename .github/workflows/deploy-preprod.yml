@@ -117,12 +117,13 @@ jobs:
           REMOTE
 
       - name: Clone production data (optional)
+        id: clone
         if: ${{ inputs.clone_prod }}
         env:
           CONTROL_HOST: 135.106.196.249
           CONTROL_HOST_FINGERPRINT: SHA256:H/PR8KAwhJ/VHNV/DiB4i8SBNI3spMLr4/I5nuZpkD8
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           install -m 600 /dev/null "$RUNNER_TEMP/control_key"
           echo "${{ secrets.CONTROL_SSH_KEY }}" > "$RUNNER_TEMP/control_key"
           ssh-keyscan -t ed25519 "$CONTROL_HOST" > "$RUNNER_TEMP/control_known_hosts" 2>/dev/null
@@ -139,7 +140,11 @@ jobs:
           scp -o BatchMode=yes /tmp/prod-backup.tgz root@${{ secrets.PREPROD_HOST }}:/tmp/
           rm /tmp/prod-backup.tgz
           echo "Restoring on preprod..."
-          ssh root@${{ secrets.PREPROD_HOST }} bash -s -- "${{ secrets.PREPROD_SITE }}" <<'RESTORE'
+
+          # Restore-скрипт исполняется из ФАЙЛА на preprod, а не через stdin bash -s:
+          # ранее `docker exec -i ... mariadb -e "..."` без своего stdin съедал
+          # остаток heredoc, bash -s на EOF выходил с кодом 0 → молчаливый false success.
+          cat > "$RUNNER_TEMP/restore-prod.sh" <<'RESTORE'
           set -Eeuo pipefail
           SITE="$1"
           cd /srv/tutor/frappe_docker
@@ -156,7 +161,7 @@ jobs:
           tar xf /tmp/prod-backup.tgz -C /tmp/restore
           DBFILE=$(ls /tmp/restore/*database*.sql.gz | head -1)
           echo "== Restore database"
-          docker exec -i "$CID" mariadb -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;"
+          docker exec -i "$CID" mariadb -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;" < /dev/null
           zcat "$DBFILE" | sed -e '/^CREATE DATABASE/d' -e '/^USE /d' | docker exec -i "$CID" mariadb -uroot -p"$DBPASS" _prodclone
           jq --arg db _prodclone '.db_name = $db' "$SITE_DIR/site_config.json" > "$SITE_DIR/site_config.json.tmp"
           mv "$SITE_DIR/site_config.json.tmp" "$SITE_DIR/site_config.json"
@@ -185,9 +190,25 @@ jobs:
           [[ "$code" == "200" ]] && echo "CLONE_OK" || { echo "FAILED after restore"; exit 1; }
           RESTORE
 
+          scp -o BatchMode=yes "$RUNNER_TEMP/restore-prod.sh" root@${{ secrets.PREPROD_HOST }}:/tmp/restore-prod.sh
+          cleanup() { ssh -n root@${{ secrets.PREPROD_HOST }} 'rm -f /tmp/restore-prod.sh /tmp/prod-backup.tgz' || true; }
+          trap cleanup EXIT
+          # -n: ssh не читает stdin раннера; ненулевой exit скрипта валит шаг (pipefail)
+          ssh -n root@${{ secrets.PREPROD_HOST }} bash /tmp/restore-prod.sh "${{ secrets.PREPROD_SITE }}" 2>&1 | tee "$RUNNER_TEMP/restore.log"
+          grep -qx 'CLONE_OK' "$RUNNER_TEMP/restore.log" \
+            && echo "clone_status=CLONE_OK" >> "$GITHUB_OUTPUT" \
+            || { echo "::error::CLONE_OK не подтверждён — прод-данные НЕ склонированы" >&2; echo "clone_status=NOT_CONFIRMED" >> "$GITHUB_OUTPUT"; exit 1; }
       - name: Result
+        env:
+          CLONE_STATUS: ${{ steps.clone.outputs.clone_status }}
         run: |
           echo "Task #${{ inputs.task_id }} deployed to preprod:"
           echo "URL:   http://${{ secrets.PREPROD_HOST }}:8080"
           echo "Image: ghcr.io/sergey-olshansky/tutor-learning:${{ inputs.image_tag }}"
-          echo "Clone: ${{ inputs.clone_prod == true && 'production data restored' || 'clean' }}"
+          if [[ "$CLONE_STATUS" == "CLONE_OK" ]]; then
+            echo "Clone: production data restored (CLONE_OK подтверждён)"
+          elif [[ -n "$CLONE_STATUS" ]]; then
+            echo "Clone: clone NOT confirmed ($CLONE_STATUS)"
+          else
+            echo "Clone: clean (clone_prod=false)"
+          fi
