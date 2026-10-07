@@ -120,8 +120,15 @@ jobs:
         if: ${{ inputs.clone_prod }}
         run: |
           set -euo pipefail
+          # Прод-ключ и known_hosts — отдельные файлы (не ~/.ssh/id_ed25519,
+          # он остаётся ключом preprod для последующих шагов). Механизм тот же,
+          # что в deploy-production.yml: PROD_DEPLOY_KEY + PROD_KNOWN_HOSTS.
+          install -m 600 /dev/null "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
           echo "== Backing up production..."
-          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s <<'BACKUP'
+          ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
+              root@${{ secrets.PROD_HOST }} bash -s <<'BACKUP'
           set -Eeuo pipefail
           cd /srv/tutor/frappe_docker
           COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
