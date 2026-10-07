@@ -1,0 +1,27 @@
+--- /opt/release-ops/release_ops.py	2026-10-06 00:13:00.353152892 +0000
++++ /tmp/release_ops.task7.py	2026-10-07 11:54:23.213074302 +0000
+@@ -147,9 +147,9 @@
+     sha = curl(f"https://api.github.com/repos/sergey-olshansky/lms/git/ref/heads/{branch}")
+     if not sha.get("object"):
+         return {"ok": False, "error": f"ветка {branch} не найдена"}
+-    sha8 = sha["object"]["sha"][:8]
++    sha12 = sha["object"]["sha"][:12]
+     before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+-    r = dispatch(token, "build.yml", {"lms_branch": branch})
++    r = dispatch(token, "build.yml", {"lms_branch": branch, "frappe_branch": "develop"})
+     if r.get("message"):
+         return {"ok": False, "error": f"build dispatch: {json.dumps(r)[:200]}"}
+     concl, rid, url = wait_run(token, "build.yml", before, timeout=1800)
+@@ -157,9 +157,10 @@
+         return {"ok": False, "error": f"сборка {concl}: {url}"}
+     versions = curl(f"https://api.github.com/user/packages/container/tutor-learning/versions?per_page=15",
+                     headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+-    tag = next((t for v in versions for t in v.get("metadata", {}).get("container", {}).get("tags", []) if f"-{sha8}-infra-" in t), None)
++    prefix = f"task-{branch.split('/')[1]}-lms-{sha12}-infra-"
++    tag = next((t for v in versions for t in v.get("metadata", {}).get("container", {}).get("tags", []) if t.startswith(prefix) and f"-run-{rid}-" in t), None)
+     if not tag:
+-        return {"ok": False, "error": f"тег с {sha8} не найден в GHCR"}
++        return {"ok": False, "error": f"тег сборки {rid} для {sha12} не найден в GHCR"}
+     before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5))
+     r = dispatch(token, "deploy-preprod.yml", {"image_tag": tag, "task_id": branch.split("/")[1]})
+     if r.get("message"):
