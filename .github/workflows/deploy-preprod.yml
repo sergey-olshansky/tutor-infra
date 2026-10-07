@@ -163,6 +163,15 @@ jobs:
           echo "== Restore database"
           docker exec -i "$CID" mariadb -uroot -p"$DBPASS" -e "DROP DATABASE IF EXISTS _prodclone; CREATE DATABASE _prodclone;" < /dev/null
           zcat "$DBFILE" | sed -e '/^CREATE DATABASE/d' -e '/^USE /d' | docker exec -i "$CID" mariadb -uroot -p"$DBPASS" _prodclone
+          TABLES=$(docker exec "$CID" mariadb -uroot -p"$DBPASS" -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='_prodclone';" 2>/dev/null || echo 0)
+          echo "   restored tables: $TABLES"
+          [ "$TABLES" -gt 50 ] || { echo "FAILED: only $TABLES tables restored"; exit 1; }
+          DBPASS_SITE=$(jq -r .db_password "$SITE_DIR/site_config.json" 2>/dev/null || echo "$DBPASS")
+          docker exec "$CID" mariadb -uroot -p"$DBPASS" -e "
+            DROP USER IF EXISTS '_prodclone'@'%';
+            CREATE USER '_prodclone'@'%' IDENTIFIED BY '$DBPASS_SITE';
+            GRANT ALL ON _prodclone.* TO '_prodclone'@'%';
+            FLUSH PRIVILEGES;" 2>/dev/null || echo "   DB user creation skipped"
           jq --arg db _prodclone '.db_name = $db' "$SITE_DIR/site_config.json" > "$SITE_DIR/site_config.json.tmp"
           mv "$SITE_DIR/site_config.json.tmp" "$SITE_DIR/site_config.json"
           chown 1000:1000 "$SITE_DIR/site_config.json"
