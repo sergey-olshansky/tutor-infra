@@ -166,27 +166,41 @@ jobs:
           TABLES=$(docker exec "$CID" mariadb -uroot -p"$DBPASS" -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='_prodclone';" 2>/dev/null || echo 0)
           echo "   restored tables: $TABLES"
           [ "$TABLES" -gt 50 ] || { echo "FAILED: only $TABLES tables restored"; exit 1; }
-          DBPASS_SITE=$(jq -r .db_password "$SITE_DIR/site_config.json" 2>/dev/null || echo "$DBPASS")
-          docker exec "$CID" mariadb -uroot -p"$DBPASS" -e "
-            DROP USER IF EXISTS '_prodclone'@'%';
-            CREATE USER '_prodclone'@'%' IDENTIFIED BY '$DBPASS_SITE';
-            GRANT ALL ON _prodclone.* TO '_prodclone'@'%';
-            FLUSH PRIVILEGES;" 2>/dev/null || echo "   DB user creation skipped"
+          # Site keeps connecting with its own db_user; only db_name changes below,
+          # so the restored _prodclone DB must be granted to the EXISTING user.
+          # (Creating a '_prodclone' user does not fix MySQL 1044 for the site.)
+          DBUSER=$(jq -r .db_user "$SITE_DIR/site_config.json")
+          [ -n "$DBUSER" ] && [ "$DBUSER" != "null" ] || { echo "FAILED: db_user not found in site_config.json"; exit 1; }
+          docker exec -i "$CID" mariadb -uroot -p"$DBPASS" -e "GRANT ALL PRIVILEGES ON _prodclone.* TO '$DBUSER'@'%'; FLUSH PRIVILEGES;" < /dev/null
           jq --arg db _prodclone '.db_name = $db' "$SITE_DIR/site_config.json" > "$SITE_DIR/site_config.json.tmp"
           mv "$SITE_DIR/site_config.json.tmp" "$SITE_DIR/site_config.json"
           chown 1000:1000 "$SITE_DIR/site_config.json"
           echo "== Restore files"
+          # Inner tars are prefixed with the PROD site name (learn.vladastay.ru),
+          # e.g. ./learn.vladastay.ru/private/files/... — there is NO sites/ segment,
+          # so the old fixed glob sites/*/private/files silently copied nothing.
           mkdir -p /tmp/restore/files-private /tmp/restore/files-public
+          EXPECT_PRIV=0; EXPECT_PUB=0
           for F in /tmp/restore/*private-files*.tar; do
-            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/files-private 2>/dev/null
+            [ -f "$F" ] || continue
+            N=$(tar -tf "$F" | grep -vc '/$'); EXPECT_PRIV=$((EXPECT_PRIV + N)); tar xf "$F" -C /tmp/restore/files-private
           done
           for F in /tmp/restore/*files.tar; do
-            [ -f "$F" ] && tar xf "$F" -C /tmp/restore/files-public 2>/dev/null
+            case "$F" in *private*) continue ;; esac   # *files.tar also matches *private-files.tar
+            [ -f "$F" ] || continue
+            N=$(tar -tf "$F" | grep -vc '/$'); EXPECT_PUB=$((EXPECT_PUB + N)); tar xf "$F" -C /tmp/restore/files-public
           done
+          echo "   expected from tars: private=$EXPECT_PRIV public=$EXPECT_PUB"
           mkdir -p "$SITE_DIR/private/files" "$SITE_DIR/public/files"
-          cp -a /tmp/restore/files-private/sites/*/private/files/. "$SITE_DIR/private/files/" 2>/dev/null || true
-          cp -a /tmp/restore/files-public/sites/*/public/files/. "$SITE_DIR/public/files/" 2>/dev/null || true
+          cp -a /tmp/restore/files-private/*/private/files/. "$SITE_DIR/private/files/"
+          cp -a /tmp/restore/files-public/*/public/files/. "$SITE_DIR/public/files/"
           chown -R 1000:1000 "$SITE_DIR/private/files" "$SITE_DIR/public/files"
+          GOT_PRIV=$(find "$SITE_DIR/private/files" -type f | wc -l); GOT_PUB=$(find "$SITE_DIR/public/files" -type f | wc -l)
+          echo "   files on disk: private=$GOT_PRIV public=$GOT_PUB"
+          if [ "$GOT_PRIV" -eq 0 ] && [ "$GOT_PUB" -eq 0 ] && { [ "$EXPECT_PRIV" -gt 0 ] || [ "$EXPECT_PUB" -gt 0 ]; }; then
+            echo "::error::files restore failed: tars had $EXPECT_PRIV private / $EXPECT_PUB public files, 0 copied to site"
+            exit 1
+          fi
           echo "== Restart"
           rm -rf /tmp/restore /tmp/prod-backup.tgz
           DC up -d --pull never backend websocket frontend scheduler queue-short queue-long 2>&1 | tail -3
