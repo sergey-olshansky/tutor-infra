@@ -8,8 +8,13 @@ on:
         required: false
         type: string
       image_tag:
-        description: "Optional tag (defaults to lms-<LMS SHA>-infra-<infra SHA>)"
+        description: "Optional additional alias (the branch/run-specific tag is always published)"
         required: false
+        type: string
+      frappe_branch:
+        description: "Frappé branch (default version-16; use develop only with compatible LMS)"
+        required: false
+        default: "version-16"
         type: string
   push:
     branches:
@@ -67,14 +72,34 @@ jobs:
           REQUESTED_TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
-          TAG=${REQUESTED_TAG:-lms-${LMS_SHA:0:8}-infra-${GITHUB_SHA:0:8}}
-          if [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-            echo "Invalid image tag: $TAG" >&2
-            exit 1
+          BRANCH_SLUG=$(printf '%s' "$LMS_BRANCH" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[^a-z0-9]+//; s/[^a-z0-9]+$//' | cut -c1-40)
+          [[ -n "$BRANCH_SLUG" ]] || { echo "Invalid branch slug" >&2; exit 1; }
+          # A run-specific tag cannot be overwritten by another branch, Frappé choice, or rebuild.
+          IMMUTABLE_TAG="branch-${BRANCH_SLUG}-lms-${LMS_SHA:0:12}-infra-${GITHUB_SHA:0:12}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tutor-learning"
+          TAGS="${IMAGE}:${IMMUTABLE_TAG}"
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            if [[ ! "$REQUESTED_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+              echo "Invalid image tag: $REQUESTED_TAG" >&2
+              exit 1
+            fi
+            if [[ "$REQUESTED_TAG" == main && "$GITHUB_EVENT_NAME" != push ]]; then
+              echo "The main tag is reserved for pushes to main" >&2
+              exit 1
+            fi
+            TAGS+=$'\n'"${IMAGE}:${REQUESTED_TAG}"
           fi
-
-          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tutor-learning" >> "$GITHUB_ENV"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          # Only an accepted change merged to main may refresh the production-facing alias.
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            TAGS+=$'\n'"${IMAGE}:main"
+          fi
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "TAG=$IMMUTABLE_TAG" >> "$GITHUB_ENV"
+          {
+            echo 'TAGS<<EOF'
+            echo "$TAGS"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -94,13 +119,11 @@ jobs:
           platforms: linux/amd64
           push: true
 
-          tags: |
-            ${{ env.IMAGE }}:${{ env.TAG }}
-            ${{ env.IMAGE }}:main
+          tags: ${{ env.TAGS }}
 
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
-            FRAPPE_BRANCH=version-16
+            FRAPPE_BRANCH=${{ inputs.frappe_branch || 'version-16' }}
             CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}-${{ env.LMS_SHA }}
 
           secret-files: |
