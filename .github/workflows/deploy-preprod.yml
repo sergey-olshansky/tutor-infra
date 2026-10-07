@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      clone_prod:
+        description: "Restore latest production data"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: preprod-deploy
