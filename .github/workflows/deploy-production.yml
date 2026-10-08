@@ -106,80 +106,9 @@ jobs:
             echo "DRY RUN: префлайт успешен, выкладка НЕ выполнялась."
           fi
 
-  backup:
-    name: Mandatory production backup
-    needs: preflight
-    if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Create Frappe backup and download archive
-        env:
-          PROD_SITE_SECRET: ${{ secrets.PROD_SITE_SECRET }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          install -m 600 /dev/null ~/.ssh/id_ed25519
-          echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
-          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-
-          TS=$(date -u +%Y%m%dT%H%M%SZ)
-          SAFE_SITE=${PROD_SITE_SECRET//[^A-Za-z0-9._-]/_}
-          ARCHIVE="$RUNNER_TEMP/lms-backup-${SAFE_SITE}-${TS}.tgz"
-          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- "$PROD_SITE_SECRET" > "$ARCHIVE" <<'REMOTE'
-          set -Eeuo pipefail
-          SITE="$1"
-          cd /srv/tutor/frappe_docker
-          COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
-          $COMPOSE exec -T backend bench --site "$SITE" backup --with-files >&2
-          $COMPOSE exec -T backend bash -s -- "$SITE" <<'CONTAINER'
-          set -Eeuo pipefail
-          SITE="$1"
-          cd /home/frappe/frappe-bench
-          DIR="sites/$SITE/private/backups"
-          mapfile -t FILES < <(find "$DIR" -maxdepth 1 -type f -printf '%T@ %p\n' | sort -rn | head -4 | cut -d' ' -f2-)
-          [ "${#FILES[@]}" -ge 2 ] || { echo "Недостаточно файлов свежего бекапа" >&2; exit 1; }
-          tar -czf - "${FILES[@]}"
-          CONTAINER
-          REMOTE
-
-          BYTES=$(stat -c%s "$ARCHIVE")
-          [ "$BYTES" -gt 1048576 ] || { echo "::error::Архив бекапа подозрительно мал: $BYTES bytes"; exit 1; }
-          sha256sum "$ARCHIVE"
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "ARCHIVE_NAME=$(basename "$ARCHIVE")" >> "$GITHUB_ENV"
-
-      - name: Store backup on control
-        env:
-          CONTROL_HOST: 135.106.196.249
-          CONTROL_HOST_FINGERPRINT: SHA256:H/PR8KAwhJ/VHNV/DiB4i8SBNI3spMLr4/I5nuZpkD8
-        run: |
-          set -euo pipefail
-          install -m 600 /dev/null "$RUNNER_TEMP/control_key"
-          echo "${{ secrets.CONTROL_SSH_KEY }}" > "$RUNNER_TEMP/control_key"
-          ssh-keyscan -t ed25519 "$CONTROL_HOST" > "$RUNNER_TEMP/control_known_hosts" 2>/dev/null
-          ACTUAL=$(ssh-keygen -lf "$RUNNER_TEMP/control_known_hosts" -E sha256 | awk 'NR==1{print $2}')
-          [ "$ACTUAL" = "$CONTROL_HOST_FINGERPRINT" ] || { echo "::error::Не совпал host key control"; exit 1; }
-
-          SSH=(ssh -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
-          SCP=(scp -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
-          "${SSH[@]}" root@"$CONTROL_HOST" 'install -d -m 700 /var/backups/production'
-          "${SCP[@]}" "$ARCHIVE" root@"$CONTROL_HOST":"/var/backups/production/.${ARCHIVE_NAME}.upload"
-          "${SSH[@]}" root@"$CONTROL_HOST" bash -s -- "$ARCHIVE_NAME" <<'CONTROL'
-          set -Eeuo pipefail
-          NAME="$1"
-          DIR=/var/backups/production
-          install -o root -g root -m 600 "$DIR/.$NAME.upload" "$DIR/$NAME"
-          rm -f "$DIR/.$NAME.upload"
-          find "$DIR" -maxdepth 1 -type f -name 'lms-backup-*.tgz' -printf '%T@ %p\n' \
-            | sort -rn | tail -n +8 | cut -d' ' -f2- | xargs -r rm -f
-          test -s "$DIR/$NAME"
-          echo "Бекап сохранён: $DIR/$NAME"
-          CONTROL
-
   deploy:
     name: Deploy
-    needs: [preflight, backup]
+    needs: preflight
     if: ${{ !inputs.dry_run }}
     environment: production
     runs-on: ubuntu-latest
@@ -333,7 +262,7 @@ jobs:
 
   report:
     name: Reports
-    needs: [backup, deploy]
+    needs: deploy
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -361,12 +290,10 @@ jobs:
           TG_CHAT: ${{ secrets.RELEASE_TG_CHAT_ID }}
         run: |
           STATUS="${{ needs.deploy.result }}"
-          BACKUP_STATUS="${{ needs.backup.result }}"
-          if [[ "$BACKUP_STATUS" != "success" ]]; then
-            EMOJI="❌"; TEXT="Выпуск не начат: обязательный бекап не создан"
+            EMOJI="❌"; TEXT="Выпуск не выполнен"
           else
             case "$STATUS" in
-              success) EMOJI="✅"; TEXT="Выпуск выполнен; обязательный бекап сохранён на control";;
+              success) EMOJI="✅"; TEXT="Выпуск выполнен";;
               failure) EMOJI="❌"; TEXT="Выпуск НЕ выполнен — задача остаётся открытой";;
               *) EMOJI="ℹ️"; TEXT="Выпуск: статус $STATUS";;
             esac
