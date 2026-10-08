@@ -320,14 +320,11 @@ jobs:
           TG_CHAT: ${{ secrets.RELEASE_TG_CHAT_ID }}
         run: |
           STATUS="${{ needs.deploy.result }}"
-            EMOJI="❌"; TEXT="Выпуск не выполнен"
-          else
-            case "$STATUS" in
-              success) EMOJI="✅"; TEXT="Выпуск выполнен";;
-              failure) EMOJI="❌"; TEXT="Выпуск НЕ выполнен — задача остаётся открытой";;
-              *) EMOJI="ℹ️"; TEXT="Выпуск: статус $STATUS";;
-            esac
-          fi
+          case "$STATUS" in
+            success) EMOJI="✅"; TEXT="Release complete";;
+            failure) EMOJI="❌"; TEXT="Release FAILED";;
+            *) EMOJI="ℹ️"; TEXT="Release: $STATUS";;
+          esac
           MSG=$(printf '%s\n' \
             "$EMOJI $TEXT" \
             "Задача: #${{ inputs.task_id }}" \
