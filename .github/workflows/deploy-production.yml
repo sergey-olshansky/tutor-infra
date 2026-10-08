@@ -118,6 +118,32 @@ jobs:
       TASK_ID: ${{ inputs.task_id }}
       GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Backup production
+        run: |
+          set -euo pipefail
+          echo "== Backing up production..."
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s <<'BACKUP'
+          set -Eeuo pipefail
+          cd /srv/tutor/frappe_docker
+          COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
+          SITE="learn.vladastay.ru"
+          echo "  Creating backup..."
+          $COMPOSE exec -T backend bench --site "$SITE" backup --with-files </dev/null 2>&1 | tail -2
+          BACKUPS=/home/frappe/frappe-bench/sites/$SITE/private/backups
+          CID=$($COMPOSE ps -q backend)
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          rm -rf /tmp/bk && mkdir -p /tmp/bk
+          for F in $(docker exec "$CID" ls -t "$BACKUPS" | head -4); do
+            docker cp "$CID:$BACKUPS/$F" /tmp/bk/ 2>/dev/null
+          done
+          tar czf /tmp/lms-backup-$TS.tgz -C /tmp/bk .
+          echo "  Sending to control..."
+          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@${{ secrets.CONTROL_HOST }} "put lms-backup-$TS.tgz" < /tmp/lms-backup-$TS.tgz
+          rm -rf /tmp/bk /tmp/lms-backup-$TS.tgz
+          echo "  Backup sent: lms-backup-$TS.tgz"
+          BACKUP
+          echo "Backup complete."
+
       - name: SSH к production
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
