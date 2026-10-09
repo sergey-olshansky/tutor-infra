@@ -1,0 +1,46 @@
+name: Ops Exec (production)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: "Команда на production (root)"
+        required: true
+        type: string
+      confirm:
+        description: "Подтверждение: поставь true"
+        required: true
+        type: boolean
+
+concurrency:
+  group: ops-exec-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify confirmation
+        if: ${{ inputs.confirm != true }}
+        run: |
+          echo "::error::Требуется confirm=true"
+          exit 1
+
+      - name: Run on production
+        env:
+          CMD: ${{ inputs.cmd }}
+          PROD_DEPLOY_KEY: ${{ secrets.PROD_DEPLOY_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${PROD_DEPLOY_KEY}" > ~/.ssh/id_ed25519
+          echo "${PROD_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -o BatchMode=yes root@"${PROD_HOST}" bash -s <<< "$CMD"
