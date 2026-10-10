@@ -76,24 +76,28 @@ def verify_frontend(container, report):
         "waveKeyframes": r"@keyframes\s+lms-ai-wave\s*\{",
         "waveAnimation24s": r"animation\s*:\s*lms-ai-wave\s+24s\s+linear\s+infinite",
         "dividerSelector": r"\.lms-ai-divider",
-        "secondWaveKeyframes": r"@keyframes\s+lms-ai-wave-blue\s*\{",
-        "independentBlueAnimation": r"animation-name\s*:\s*lms-ai-wave-blue",
-        "independentEasing": r"animation-timing-function\s*:\s*ease-in-out",
+        "singleWaveHueKeyframes": r"@keyframes\s+lms-ai-hue\s*\{",
+        "singleWaveHueAnimation": r"lms-ai-hue\s+24s\s+ease-in-out\s+infinite",
         "tealWavePeak": r"#71c7cc",
         "blueWavePeak": r"#99bbd8",
+        "lavenderWavePeak": r"#b7b0d5",
+        "absoluteOpacity10Percent": r"\.lms-ai-divider\s*\{[^}]*opacity\s*:\s*0?\.1(?:0)?[;}]",
+        "repeatingIntensityMask": r"mask-size\s*:\s*100%\s+50%",
         "secondaryBackgroundToken": r"--lms-secondary\s*:\s*#d8eff1",
-        "secondaryTextToken": r"--lms-action\s*:\s*#087985",
-        "secondaryPalette": r"\.lms-quiz-secondary\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)[^}]*color\s*:\s*var\(--lms-action\)",
+        "secondaryTextToken": r"--lms-secondary-text\s*:\s*#077581",
+        "secondaryPalette": r"\.lms-quiz-secondary\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)[^}]*color\s*:\s*var\(--lms-secondary-text\)",
         "secondaryHover": r"\.lms-quiz-secondary:hover:not\(:disabled\)",
         "secondaryDisabled": r"\.lms-quiz-secondary:disabled\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)",
         "secondaryFocus": r"lms-quiz-secondary[^}]*:focus-visible",
-        "leftOnly12px": r"width\s*:\s*12px",
+        "leftOnly14px": r"width\s*:\s*14px",
         "travellingTransform": r"translateY\(-50%\)",
         "reducedMotion": r"prefers-reduced-motion\s*:\s*reduce",
     }
     for name, expression in assertions.items():
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
+    if re.search(r"lms-ai-wave-blue|\.lms-ai-divider:{1,2}after", combined):
+        raise ValueError("Compiled R6 CSS contains a second painted wave layer")
     # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
     result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
     js_assets = []
@@ -122,8 +126,37 @@ def main():
         parser.error("Expected an immutable image digest and full LMS SHA")
     image = f"{REPOSITORY}@{args.digest}"
     subprocess.run(["docker", "pull", image], check=True)
+    raw = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", image])
+    if digest(raw) != args.digest.removeprefix("sha256:"):
+        raise ValueError("Registry manifest bytes differ from requested digest")
+    manifest = json.loads(raw)
+    platform_image = image
+    mapping = {"requestedDigest": args.digest, "mediaType": manifest.get("mediaType"),
+               "rawManifestSha256": "sha256:" + digest(raw)}
+    if "manifests" in manifest:
+        candidates = [m for m in manifest["manifests"] if m.get("platform", {}).get("os") == "linux"
+                      and m.get("platform", {}).get("architecture") == "amd64"]
+        if len(candidates) != 1:
+            raise ValueError("Expected exactly one linux/amd64 platform manifest")
+        platform_digest = candidates[0]["digest"]
+        platform_image = f"{REPOSITORY}@{platform_digest}"
+        platform_raw = subprocess.check_output(["docker", "buildx", "imagetools", "inspect", "--raw", platform_image])
+        if "sha256:" + digest(platform_raw) != platform_digest:
+            raise ValueError("Platform manifest bytes differ from index descriptor")
+        platform_manifest = json.loads(platform_raw)
+        mapping["indexDigest"] = args.digest
+        mapping["descriptors"] = manifest["manifests"]
+    else:
+        platform_digest = args.digest
+        platform_manifest = manifest
+        mapping["indexDigest"] = None
+    mapping["platform"] = {"os": "linux", "architecture": "amd64", "digest": platform_digest,
+                           "configDigest": platform_manifest["config"]["digest"]}
+    image_config = json.loads(subprocess.check_output(["docker", "image", "inspect", image]))[0]
+    if image_config["Id"] != mapping["platform"]["configDigest"] or image_config["Os"] != "linux" or image_config["Architecture"] != "amd64":
+        raise ValueError("Pulled image config/platform differs from registry manifest")
     container = subprocess.check_output(["docker", "create", "--network", "none", "--entrypoint", "/bin/true", image], text=True).strip()
-    report = {"status": "VERIFIED", "image": image, "revision": args.sha, "checks": []}
+    report = {"status": "VERIFIED", "image": image, "revision": args.sha, "checks": [], "digestMapping": mapping}
     try:
         paths = ["lms/hooks.py", "lms/public/css/mytutor-login.css", "lms/public/js/mytutor-login.js",
                  "lms/public/css/mytutor-common.css", "frontend/src/styles/mytutor.css", "frontend/src/components/Quiz.vue"]
