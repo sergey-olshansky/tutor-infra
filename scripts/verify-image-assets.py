@@ -78,10 +78,13 @@ def verify_frontend(container, report):
         "dividerSelector": r"\.lms-ai-divider",
         "singleWaveHueKeyframes": r"@keyframes\s+lms-ai-hue\s*\{",
         "singleWaveHueAnimation": r"lms-ai-hue\s+24s\s+ease-in-out\s+infinite",
-        "tealWavePeak": r"#71c7cc",
-        "blueWavePeak": r"#99bbd8",
-        "lavenderWavePeak": r"#b7b0d5",
-        "absoluteOpacity10Percent": r"\.lms-ai-divider\s*\{[^}]*opacity\s*:\s*0?\.1(?:0)?[;}]",
+        "tealWavePeak": r"#49aeb8",
+        "blueWavePeak": r"#739fcb",
+        "lavenderWavePeak": r"#a399cb",
+        "fullCompositeOpacity": r"\.lms-ai-divider\s*\{[^}]*opacity\s*:\s*1[;}]",
+        "visible2pxCore": r"(?:#000000d1|rgba\(0,\s*0,\s*0,\s*0?\.82\)|rgb\(0 0 0\s*/\s*0?\.82\))\s+calc\(100%\s*-\s*2px\)",
+        "nonlinearInwardFalloff": r"(?:#0000000a|rgba\(0,\s*0,\s*0,\s*0?\.04\)|rgb\(0 0 0\s*/\s*0?\.04\))\s+25%.*?(?:#00000029|rgba\(0,\s*0,\s*0,\s*0?\.16\)|rgb\(0 0 0\s*/\s*0?\.16\))\s+50%.*?(?:#00000052|rgba\(0,\s*0,\s*0,\s*0?\.32\)|rgb\(0 0 0\s*/\s*0?\.32\))\s+75%",
+        "coreFalloffBoundary": r"(?:#0006|rgba\(0,\s*0,\s*0,\s*0?\.4\)|rgb\(0 0 0\s*/\s*0?\.4\))\s+calc\(100%\s*-\s*2px\)",
         "repeatingIntensityMask": r"mask-size\s*:\s*100%\s+50%",
         "secondaryBackgroundToken": r"--lms-secondary\s*:\s*#d8eff1",
         "secondaryTextToken": r"--lms-secondary-text\s*:\s*#077581",
@@ -97,7 +100,7 @@ def verify_frontend(container, report):
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
     if re.search(r"lms-ai-wave-blue|\.lms-ai-divider:{1,2}after", combined):
-        raise ValueError("Compiled R6 CSS contains a second painted wave layer")
+        raise ValueError("Compiled R7 CSS contains a second painted wave layer")
     # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
     result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
     js_assets = []
