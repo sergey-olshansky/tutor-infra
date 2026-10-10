@@ -76,6 +76,17 @@ def verify_frontend(container, report):
         "waveKeyframes": r"@keyframes\s+lms-ai-wave\s*\{",
         "waveAnimation24s": r"animation\s*:\s*lms-ai-wave\s+24s\s+linear\s+infinite",
         "dividerSelector": r"\.lms-ai-divider",
+        "secondWaveKeyframes": r"@keyframes\s+lms-ai-wave-blue\s*\{",
+        "independentBlueAnimation": r"animation-name\s*:\s*lms-ai-wave-blue",
+        "independentEasing": r"animation-timing-function\s*:\s*ease-in-out",
+        "tealWavePeak": r"#71c7cc",
+        "blueWavePeak": r"#99bbd8",
+        "secondaryBackgroundToken": r"--lms-secondary\s*:\s*#d8eff1",
+        "secondaryTextToken": r"--lms-action\s*:\s*#087985",
+        "secondaryPalette": r"\.lms-quiz-secondary\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)[^}]*color\s*:\s*var\(--lms-action\)",
+        "secondaryHover": r"\.lms-quiz-secondary:hover:not\(:disabled\)",
+        "secondaryDisabled": r"\.lms-quiz-secondary:disabled\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)",
+        "secondaryFocus": r"lms-quiz-secondary[^}]*:focus-visible",
         "leftOnly12px": r"width\s*:\s*12px",
         "travellingTransform": r"translateY\(-50%\)",
         "reducedMotion": r"prefers-reduced-motion\s*:\s*reduce",
@@ -83,6 +94,19 @@ def verify_frontend(container, report):
     for name, expression in assertions.items():
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
+    # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
+    result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
+    js_assets = []
+    with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+        for member in archive.getmembers():
+            if member.isfile() and member.name.endswith(".js"):
+                data = archive.extractfile(member).read()
+                if b"lms-quiz-secondary" in data and b"Check" in data and b"lms-quiz-primary" in data:
+                    js_assets.append({"path": member.name, "sha256": digest(data), "bytes": len(data),
+                                      "assertions": ["secondaryQuizAction", "checkLabel", "primaryFinishAction"]})
+    if not js_assets:
+        raise ValueError("Packaged quiz JS lacks secondary Check and primary Finish signatures")
+    report["quizJavascript"] = js_assets
     report["frontend"] = {"htmlPath": html_path, "htmlSha256": digest(html),
                           "assets": assets, "waveAssertions": list(assertions)}
 
@@ -102,7 +126,7 @@ def main():
     report = {"status": "VERIFIED", "image": image, "revision": args.sha, "checks": []}
     try:
         paths = ["lms/hooks.py", "lms/public/css/mytutor-login.css", "lms/public/js/mytutor-login.js",
-                 "lms/public/css/mytutor-common.css", "frontend/src/styles/mytutor.css"]
+                 "lms/public/css/mytutor-common.css", "frontend/src/styles/mytutor.css", "frontend/src/components/Quiz.vue"]
         for relative in paths:
             source = args.source / relative
             if not source.is_file():
