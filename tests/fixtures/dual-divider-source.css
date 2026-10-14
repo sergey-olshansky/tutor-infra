@@ -1,7 +1,32 @@
+@property --lms-third-colour {
+	syntax: "<color>";
+	inherits: false;
+	initial-value: #d58ea7;
+}
+@property --lms-third-center {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 50%;
+}
+@property --lms-third-span {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 34%;
+}
+@property --lms-third-gain {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 0.7;
+}
+@property --lms-third-width {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 22px;
+}
 @property --lms-stream-width {
 	syntax: "<length>";
 	inherits: false;
-	initial-value: 10px;
+	initial-value: 20px;
 }
 @property --lms-presence {
 	syntax: "<number>";
@@ -85,20 +110,23 @@
 	right: 0;
 	width: 27px;
 	overflow: hidden;
+	/* Isolate only this decoration, so light can mix without trapping UI. */
+	isolation: isolate;
 	pointer-events: none;
 	/* A soft 1px colour peak and a wider, brighter nonlinear soft
 	   falloff paint inward only; the vertical mask supplies one local wave per stream.
-	   Normal source-over compositing keeps colour visible on pale surfaces. */
+	   Light mixes inside this isolated decoration, above the pale surface. */
 	opacity: 1;
 
 }
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before,
-:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after,
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-stream-third {
 	content: "";
 	position: absolute;
 	inset: 0 0 -100% auto;
 	width: var(--lms-stream-width);
-	opacity: calc(var(--lms-presence) * var(--lms-density));
+	opacity: calc(var(--lms-presence) * var(--lms-density) * 0.72);
 	filter: brightness(calc(var(--lms-ink) * var(--lms-breath))) saturate(var(--lms-saturation));
 	background-color: #49aeb8;
 	/* A faint procedural grain scatters light like fine sand, without blur.
@@ -112,6 +140,8 @@
 		linear-gradient(180deg, transparent calc(var(--lms-lavender-center) - var(--lms-lavender-span)),
 			var(--lms-lavender-colour) var(--lms-lavender-center), transparent calc(var(--lms-lavender-center) + var(--lms-lavender-span)));
 	background-size: 100% 50%;
+	background-blend-mode: screen;
+	mix-blend-mode: screen;
 	/* One broad, slightly asymmetric intensity envelope per surface height.
 	   Repeated identical tiles and a one-tile translation join seamlessly.
 	   Each point brightens and fades as this single wave passes. */
@@ -119,24 +149,24 @@
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
 		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
 		rgb(0 0 0 / 0.92) calc(100% - 1px),
-		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), var(--lms-intensity-mask, linear-gradient(
+		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
 		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
 		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
-	)), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
+	), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
 	mask-image: linear-gradient(to right,
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
 		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
 		rgb(0 0 0 / 0.92) calc(100% - 1px),
-		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), var(--lms-intensity-mask, linear-gradient(
+		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
 		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
 		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
-	)), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
+	), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
 	-webkit-mask-size: 100% 100%, 100% 50%, 96px 96px;
 	mask-size: 100% 100%, 100% 50%, 96px 96px;
 	-webkit-mask-composite: source-in, source-in;
@@ -154,7 +184,8 @@
 		lms-ai-teal-bloom 37s ease-in-out infinite,
 		lms-ai-blue-bloom 47s ease-in-out infinite,
 		lms-ai-lavender-bloom 59s ease-in-out infinite,
-		lms-ai-width 31s ease-in-out infinite;
+		lms-ai-width 31s ease-in-out infinite,
+		lms-ai-sand-drift 83s linear infinite;
 }
 @keyframes lms-ai-wave {
 	from {
@@ -194,23 +225,12 @@
 	50% { --lms-lavender-center: 66%; --lms-lavender-span: 32%; --lms-lavender-colour: rgb(121 176 211 / 0.9); }
 }
 
-/* A steady source at the top diffuses downward; only the other stream travels. */
-:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
-	inset: 0 0 0 auto;
-	transform: none;
-	--lms-intensity-mask: linear-gradient(180deg, #000, rgb(0 0 0 / 0.8) 20%, transparent 70%);
-	background-size: 100% 100%;
-	-webkit-mask-size: 100% 100%, 100% 100%, 96px 96px;
-	mask-size: 100% 100%, 100% 100%, 96px 96px;
-	animation-name: none, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
-		none, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width;
-}
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
-	animation-name: lms-ai-wave, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
-		lms-ai-drift, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width;
-	animation-duration: 61s, 67s, 23s, 41s, 71s, 43s, 57s, 73s, 43s;
-	animation-delay: -30.5s, -19s, -8s, -20.5s, -17s, -11s, -23s, -37s, -14s;
-	animation-direction: reverse, normal, normal, normal, reverse, normal, normal, normal, normal;
+	animation-name: lms-ai-wave-wander, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
+		lms-ai-drift, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width, lms-ai-sand-drift;
+	animation-duration: 61s, 67s, 23s, 41s, 71s, 43s, 57s, 73s, 43s, 97s;
+	animation-delay: -30.5s, -19s, -8s, -20.5s, -17s, -11s, -23s, -37s, -14s, -43s;
+	animation-direction: reverse, normal, normal, normal, reverse, normal, normal, normal, normal, reverse;
 }
 @keyframes lms-ai-presence {
 	0%, 100% { --lms-presence: 1; }
@@ -225,22 +245,63 @@
 	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before,
 	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
 		animation: none;
-		opacity: 0.65;
+		opacity: 0.25;
 	}
 }
 
 /* A narrow stream concentrates light; a broad one diffuses it. */
 @keyframes lms-ai-width {
 	0%, 100% {
-		--lms-stream-width: 10px;
+		--lms-stream-width: 20px;
 		--lms-density: 1;
 		--lms-ink: 1.16;
 		--lms-saturation: 115%;
 	}
 	50% {
 		--lms-stream-width: 25px;
-		--lms-density: 0.45;
+		--lms-density: 0.65;
 		--lms-ink: 1;
 		--lms-saturation: 65%;
+	}
+}
+
+@keyframes lms-ai-wave-wander {
+	from { transform: translateX(var(--lms-drift)) translateY(-50%); }
+	to { transform: translateX(var(--lms-drift)) translateY(0); }
+}
+
+/* The tile meets itself exactly; this moves only the very fine grain. */
+@keyframes lms-ai-sand-drift {
+	from { -webkit-mask-position: 0 0, 0 0, 0 0; mask-position: 0 0, 0 0, 0 0; }
+	to { -webkit-mask-position: 0 0, 0 0, 96px 96px; mask-position: 0 0, 0 0, 96px 96px; }
+}
+
+/* A softly present third stream prevents the edge from fading away as the
+   first pair alternates. Registered properties let random changes melt in. */
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-stream-third {
+	width: var(--lms-third-width);
+	opacity: calc(var(--lms-third-gain) * 0.55);
+	background-color: rgb(89 146 175 / 0.35);
+	background-image: linear-gradient(180deg,
+		transparent calc(var(--lms-third-center) - var(--lms-third-span)),
+		var(--lms-third-colour) var(--lms-third-center),
+		transparent calc(var(--lms-third-center) + var(--lms-third-span)));
+	animation-name: lms-ai-wave-third, none, lms-ai-breathe, none,
+		lms-ai-drift, none, none, none, none, lms-ai-sand-drift;
+	animation-duration: 79s, 67s, 31s, 41s, 89s, 43s, 57s, 73s, 43s, 109s;
+	animation-delay: -43s, 0s, -11s, 0s, -29s, 0s, 0s, 0s, 0s, -71s;
+	transition: --lms-third-colour 8s ease-in-out,
+		--lms-third-center 9s ease-in-out, --lms-third-span 11s ease-in-out,
+		--lms-third-gain 8s ease-in-out, --lms-third-width 10s ease-in-out;
+}
+@keyframes lms-ai-wave-third {
+	from { transform: translateX(var(--lms-drift)) translateY(-50%); }
+	to { transform: translateX(var(--lms-drift)) translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-stream-third {
+		animation: none;
+		transition: none;
+		opacity: 0.25;
 	}
 }

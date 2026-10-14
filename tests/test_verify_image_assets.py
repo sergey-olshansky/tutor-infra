@@ -17,7 +17,7 @@ DUAL_SOURCE = (ROOT / 'tests/fixtures/dual-divider-source.css').read_text()
 
 
 class FrontendVerificationTests(unittest.TestCase):
-    def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=None):
+    def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary","lms-ai-wave-wander","updatePlaybackRate","lmsDividerMotion","lms-ai-stream-third"', source_css=None):
         html = b'<script src="/assets/lms/frontend/assets/index.js"></script><link rel="stylesheet" href="/assets/lms/frontend/assets/index.css">'
         files = {
             f'{verify.BENCH}/apps/lms/lms/www/_lms.html': html,
@@ -85,9 +85,13 @@ class FrontendVerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
 
+    def test_dual_wave_requires_the_packaged_motion_controller(self):
+        with self.assertRaisesRegex(ValueError, 'random divider travel controller'):
+            self.inspect(DUAL_CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=DUAL_SOURCE)
+
     def test_dual_wave_matches_its_pinned_source(self):
         report = self.inspect(DUAL_CSS, source_css=DUAL_SOURCE)
-        self.assertEqual(report['frontend']['dividerProfile'], 'dual-living-streams')
+        self.assertEqual(report['frontend']['dividerProfile'], 'three-living-streams')
 
     def test_dual_wave_rejects_synchronized_colour_cycles(self):
         with self.assertRaisesRegex(ValueError, 'blueIndependentCycle'):

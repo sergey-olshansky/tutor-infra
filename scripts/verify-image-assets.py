@@ -104,10 +104,10 @@ def verify_frontend(container, report, source_css=None):
     profile = "task25-original"
     if source_css is not None:
         if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*27px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
-            profile = "dual-living-streams"
+            profile = "three-living-streams"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
             raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
-    if profile == "dual-living-streams":
+    if profile == "three-living-streams":
         for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
             del assertions[name]
 
@@ -124,6 +124,7 @@ def verify_frontend(container, report, source_css=None):
             "repeatingIntensityMask": r"mask-size:100% 100%,100% 50%,96px 96px",
             "intersectingStreamMasks": r"mask-composite:intersect,intersect",
             "secondStream": r"\.lms-ai-divider:{1,2}after\s*\{",
+            "randomTravelAnimation": r"animation-name:lms-ai-wave-wander,lms-ai-hue",
             "opposingStreamMotion": r"animation-direction:reverse,normal,normal,normal,reverse,normal,normal,normal,normal",
             "sharedPresencePeriod": r"lms-ai-presence 41s ease-in-out infinite",
             "complementaryPresencePhase": r"animation-delay:-30\.5s,-19s,-8s,-20\.5s",
@@ -131,12 +132,15 @@ def verify_frontend(container, report, source_css=None):
             "presenceExtremes": r"@keyframes lms-ai-presence\{0%,(?:100%|to)\{--lms-presence:\s*1\}50%\{--lms-presence:\s*0\}",
             "softOuterEdge": alpha(.38) + r"\s+calc\(100%\s*-\s*\.25px\),transparent",
             "sandGrain": r"data:image/svg\+xml,.*?feTurbulence",
-            "anchoredTopStream": r"\.lms-ai-divider:{1,2}before\{inset:0 0 0 auto;transform:none;--lms-intensity-mask:",
-            "stationaryStreamMotion": r"animation-name:none,lms-ai-hue,lms-ai-breathe,lms-ai-presence,none,",
+            "thirdStream": r"\.lms-ai-stream-third\{width:var\(--lms-third-width\)",
+            "thirdVisibilityFloor": r"opacity:calc\(var\(--lms-third-gain\) \* \.55\)",
+            "thirdTravel": r"animation-name:lms-ai-wave-third,none,lms-ai-breathe",
+            "localLightMixing": r"background-blend-mode:screen;mix-blend-mode:screen",
+            "driftingGrain": r"lms-ai-sand-drift 83s linear infinite",
             "variableStreamWidth": r"width:var\(--lms-stream-width\)",
-            "narrowConcentratedLight": r"--lms-stream-width:\s*10px;--lms-density:\s*1;--lms-ink:\s*1\.16;--lms-saturation:\s*115%",
-            "wideDiffusedLight": r"--lms-stream-width:\s*25px;--lms-density:\s*\.45;--lms-ink:\s*1;--lms-saturation:\s*65%",
-            "densityMultipliesPresence": r"opacity:calc\(var\(--lms-presence\) \* var\(--lms-density\)\)",
+            "narrowConcentratedLight": r"--lms-stream-width:\s*20px;--lms-density:\s*1;--lms-ink:\s*1\.16;--lms-saturation:\s*115%",
+            "wideDiffusedLight": r"--lms-stream-width:\s*25px;--lms-density:\s*\.65;--lms-ink:\s*1;--lms-saturation:\s*65%",
+            "densityMultipliesPresence": r"opacity:calc\(var\(--lms-presence\) \* var\(--lms-density\) \* \.72\)",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
         for colour, period in [("teal", 37), ("blue", 47), ("lavender", 59)]:
@@ -153,13 +157,18 @@ def verify_frontend(container, report, source_css=None):
     # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
     result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
     js_assets = []
+    has_motion = False
     with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
         for member in archive.getmembers():
             if member.isfile() and member.name.endswith(".js"):
                 data = archive.extractfile(member).read()
+                if all(signature in data for signature in [b"lms-ai-wave-wander", b"updatePlaybackRate", b"lmsDividerMotion", b"lms-ai-stream-third"]):
+                    has_motion = True
                 if b"lms-quiz-secondary" in data and b"Check" in data and b"lms-quiz-primary" in data:
                     js_assets.append({"path": member.name, "sha256": digest(data), "bytes": len(data),
                                       "assertions": ["secondaryQuizAction", "checkLabel", "primaryFinishAction"]})
+    if profile == "three-living-streams" and not has_motion:
+        raise ValueError("Packaged frontend JS lacks random divider travel controller")
     if not js_assets:
         raise ValueError("Packaged quiz JS lacks secondary Check and primary Finish signatures")
     report["quizJavascript"] = js_assets
@@ -211,7 +220,8 @@ def main():
     report = {"status": "VERIFIED", "image": image, "revision": args.sha, "checks": [], "digestMapping": mapping}
     try:
         paths = ["lms/hooks.py", "lms/public/css/mytutor-login.css", "lms/public/js/mytutor-login.js",
-                 "lms/public/css/mytutor-common.css", "frontend/src/styles/mytutor.css", "frontend/src/components/Quiz.vue"]
+                 "lms/public/css/mytutor-common.css", "frontend/src/styles/mytutor.css", "frontend/src/components/Quiz.vue",
+                 "lms/public/js/mytutor-divider-motion.js", "frontend/src/components/Layouts/pages/desktop/DesktopLayout.vue"]
         for relative in paths:
             source = args.source / relative
             if not source.is_file():
