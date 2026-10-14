@@ -117,18 +117,22 @@ def verify_frontend(container, report, source_css=None):
             return rf"(?:#000000{byte:02x}|rgba\(0,\s*0,\s*0,\s*0?{decimal}\)|rgb\(0 0 0\s*/\s*0?{decimal}\))"
 
         assertions.update({
-            "confident2pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*2px\)",
+            "fine1pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*1px\)",
             "strongInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
-            "coreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*2px\)",
+            "coreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*1px\)",
             "leftOnly22px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*22px\s*[;}]",
             "repeatingIntensityMask": r"mask-size:100% 100%,100% 50%",
             "intersectingStreamMasks": r"mask-composite:intersect",
             "secondStream": r"\.lms-ai-divider:{1,2}after\s*\{",
-            "opposingStreamMotion": r"animation-direction:reverse,normal,normal,normal,reverse,normal,normal,normal",
+            "opposingStreamMotion": r"animation-direction:reverse,normal,normal,normal,reverse,normal,normal,normal,normal",
             "sharedPresencePeriod": r"lms-ai-presence 41s ease-in-out infinite",
             "complementaryPresencePhase": r"animation-delay:-30\.5s,-19s,-8s,-20\.5s",
             "secondPresencePeriod": r"animation-duration:61s,67s,23s,41s",
-            "presenceExtremes": r"@keyframes lms-ai-presence\{0%,(?:100%|to)\{opacity:1\}50%\{opacity:0\}",
+            "presenceExtremes": r"@keyframes lms-ai-presence\{0%,(?:100%|to)\{--lms-presence:\s*1\}50%\{--lms-presence:\s*0\}",
+            "variableStreamWidth": r"width:var\(--lms-stream-width\)",
+            "narrowConcentratedLight": r"--lms-stream-width:\s*6px;--lms-density:\s*1;--lms-ink:\s*1\.16;--lms-saturation:\s*115%",
+            "wideDiffusedLight": r"--lms-stream-width:\s*20px;--lms-density:\s*\.45;--lms-ink:\s*1;--lms-saturation:\s*65%",
+            "densityMultipliesPresence": r"opacity:calc\(var\(--lms-presence\) \* var\(--lms-density\)\)",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
         for colour, period in [("teal", 37), ("blue", 47), ("lavender", 59)]:

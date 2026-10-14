@@ -1,3 +1,33 @@
+@property --lms-stream-width {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 6px;
+}
+@property --lms-presence {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1;
+}
+@property --lms-density {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1;
+}
+@property --lms-ink {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1.16;
+}
+@property --lms-saturation {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 115%;
+}
+@property --lms-breath {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1;
+}
 @property --lms-drift {
 	syntax: "<length>";
 	inherits: false;
@@ -56,7 +86,7 @@
 	width: 22px;
 	overflow: hidden;
 	pointer-events: none;
-	/* A confident 2px colour core and a wider, brighter nonlinear soft
+	/* A fine 1px colour core and a wider, brighter nonlinear soft
 	   falloff paint inward only; the vertical mask supplies one local wave per stream.
 	   Normal source-over compositing keeps colour visible on pale surfaces. */
 	opacity: 1;
@@ -67,7 +97,9 @@
 	content: "";
 	position: absolute;
 	inset: 0 0 -100% auto;
-	width: 18px;
+	width: var(--lms-stream-width);
+	opacity: calc(var(--lms-presence) * var(--lms-density));
+	filter: brightness(calc(var(--lms-ink) * var(--lms-breath))) saturate(var(--lms-saturation));
 	background-color: #49aeb8;
 	/* Three simultaneous colour blooms in each travelling stream. Each bloom
 	   changes its own height and shade on a different, seamless cycle. */
@@ -84,8 +116,8 @@
 	   Each point brightens and fades as this single wave passes. */
 	-webkit-mask-image: linear-gradient(to right,
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
-		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
-		rgb(0 0 0 / 1) calc(100% - 2px)), linear-gradient(
+		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 1px),
+		rgb(0 0 0 / 1) calc(100% - 1px)), linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
@@ -94,8 +126,8 @@
 	);
 	mask-image: linear-gradient(to right,
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
-		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
-		rgb(0 0 0 / 1) calc(100% - 2px)), linear-gradient(
+		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 1px),
+		rgb(0 0 0 / 1) calc(100% - 1px)), linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
@@ -118,7 +150,8 @@
 		lms-ai-drift 53s ease-in-out infinite,
 		lms-ai-teal-bloom 37s ease-in-out infinite,
 		lms-ai-blue-bloom 47s ease-in-out infinite,
-		lms-ai-lavender-bloom 59s ease-in-out infinite;
+		lms-ai-lavender-bloom 59s ease-in-out infinite,
+		lms-ai-width 31s ease-in-out infinite;
 }
 @keyframes lms-ai-wave {
 	from {
@@ -129,8 +162,8 @@
 	}
 }
 @keyframes lms-ai-breathe {
-	0%, 100% { filter: brightness(0.97); }
-	50% { filter: brightness(1); }
+	0%, 100% { --lms-breath: 0.97; }
+	50% { --lms-breath: 1; }
 }
 @keyframes lms-ai-hue {
 	0%, 100% { background-color: #49aeb8; }
@@ -160,18 +193,18 @@
 
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
 	animation-name: lms-ai-wave, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
-		lms-ai-drift, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom;
-	animation-duration: 61s, 67s, 23s, 41s, 71s, 43s, 57s, 73s;
-	animation-delay: -30.5s, -19s, -8s, -20.5s, -17s, -11s, -23s, -37s;
-	animation-direction: reverse, normal, normal, normal, reverse, normal, normal, normal;
+		lms-ai-drift, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width;
+	animation-duration: 61s, 67s, 23s, 41s, 71s, 43s, 57s, 73s, 43s;
+	animation-delay: -30.5s, -19s, -8s, -20.5s, -17s, -11s, -23s, -37s, -14s;
+	animation-direction: reverse, normal, normal, normal, reverse, normal, normal, normal, normal;
 }
 @keyframes lms-ai-presence {
-	0%, 100% { opacity: 1; }
-	50% { opacity: 0; }
+	0%, 100% { --lms-presence: 1; }
+	50% { --lms-presence: 0; }
 }
 @keyframes lms-ai-drift {
 	0%, 100% { --lms-drift: 0px; }
-	50% { --lms-drift: -4px; }
+	50% { --lms-drift: -2px; }
 }
 /* Both streams are still and present when reduced motion is requested. */
 @media (prefers-reduced-motion: reduce) {
@@ -179,5 +212,21 @@
 	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
 		animation: none;
 		opacity: 0.65;
+	}
+}
+
+/* A narrow stream concentrates light; a broad one diffuses it. */
+@keyframes lms-ai-width {
+	0%, 100% {
+		--lms-stream-width: 6px;
+		--lms-density: 1;
+		--lms-ink: 1.16;
+		--lms-saturation: 115%;
+	}
+	50% {
+		--lms-stream-width: 20px;
+		--lms-density: 0.45;
+		--lms-ink: 1;
+		--lms-saturation: 65%;
 	}
 }
