@@ -86,7 +86,7 @@
 	width: 27px;
 	overflow: hidden;
 	pointer-events: none;
-	/* A fine 1px colour core and a wider, brighter nonlinear soft
+	/* A soft 1px colour peak and a wider, brighter nonlinear soft
 	   falloff paint inward only; the vertical mask supplies one local wave per stream.
 	   Normal source-over compositing keeps colour visible on pale surfaces. */
 	opacity: 1;
@@ -101,7 +101,8 @@
 	opacity: calc(var(--lms-presence) * var(--lms-density));
 	filter: brightness(calc(var(--lms-ink) * var(--lms-breath))) saturate(var(--lms-saturation));
 	background-color: #49aeb8;
-	/* Three simultaneous colour blooms in each travelling stream. Each bloom
+	/* A faint procedural grain scatters light like fine sand, without blur.
+	   Three simultaneous colour blooms in each travelling stream. Each bloom
 	   changes its own height and shade on a different, seamless cycle. */
 	background-image:
 		linear-gradient(180deg, transparent calc(var(--lms-teal-center) - var(--lms-teal-span)),
@@ -116,28 +117,30 @@
 	   Each point brightens and fades as this single wave passes. */
 	-webkit-mask-image: linear-gradient(to right,
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
-		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 1px),
-		rgb(0 0 0 / 1) calc(100% - 1px)), linear-gradient(
+		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
+		rgb(0 0 0 / 0.92) calc(100% - 1px),
+		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), var(--lms-intensity-mask, linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
 		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
 		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
-	);
+	)), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
 	mask-image: linear-gradient(to right,
 		transparent, rgb(0 0 0 / 0.12) 25%, rgb(0 0 0 / 0.36) 50%,
-		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 1px),
-		rgb(0 0 0 / 1) calc(100% - 1px)), linear-gradient(
+		rgb(0 0 0 / 0.60) 75%, rgb(0 0 0 / 0.72) calc(100% - 2px),
+		rgb(0 0 0 / 0.92) calc(100% - 1px),
+		rgb(0 0 0 / 0.38) calc(100% - 0.25px), transparent), var(--lms-intensity-mask, linear-gradient(
 		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
 		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
 		rgb(0 0 0 / 0.82) 42%, #000 50%,
 		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
 		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
-	);
-	-webkit-mask-size: 100% 100%, 100% 50%;
-	mask-size: 100% 100%, 100% 50%;
-	-webkit-mask-composite: source-in;
-	mask-composite: intersect;
+	)), url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2296%22%20height%3D%2296%22%3E%3Cfilter%20id%3D%22sand%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%22.72%22%20numOctaves%3D%223%22%20stitchTiles%3D%22stitch%22%2F%3E%3CfeColorMatrix%20type%3D%22matrix%22%20values%3D%220%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.16%200%200%200%20.84%22%2F%3E%3C%2Ffilter%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20filter%3D%22url%28%23sand%29%22%2F%3E%3C%2Fsvg%3E");
+	-webkit-mask-size: 100% 100%, 100% 50%, 96px 96px;
+	mask-size: 100% 100%, 100% 50%, 96px 96px;
+	-webkit-mask-composite: source-in, source-in;
+	mask-composite: intersect, intersect;
 	animation:
 		lms-ai-wave 48s linear(
 			0, 0.1112 10%, 0.2187 20%, 0.3182 30%, 0.4112 40%,
@@ -191,6 +194,17 @@
 	50% { --lms-lavender-center: 66%; --lms-lavender-span: 32%; --lms-lavender-colour: rgb(121 176 211 / 0.9); }
 }
 
+/* A steady source at the top diffuses downward; only the other stream travels. */
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
+	inset: 0 0 0 auto;
+	transform: none;
+	--lms-intensity-mask: linear-gradient(180deg, #000, rgb(0 0 0 / 0.8) 20%, transparent 70%);
+	background-size: 100% 100%;
+	-webkit-mask-size: 100% 100%, 100% 100%, 96px 96px;
+	mask-size: 100% 100%, 100% 100%, 96px 96px;
+	animation-name: none, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
+		none, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width;
+}
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::after {
 	animation-name: lms-ai-wave, lms-ai-hue, lms-ai-breathe, lms-ai-presence,
 		lms-ai-drift, lms-ai-teal-bloom, lms-ai-blue-bloom, lms-ai-lavender-bloom, lms-ai-width;

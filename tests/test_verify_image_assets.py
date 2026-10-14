@@ -95,7 +95,7 @@ class FrontendVerificationTests(unittest.TestCase):
 
     def test_dual_wave_rejects_a_wider_core(self):
         with self.assertRaisesRegex(ValueError, 'fine1pxCore'):
-            self.inspect(DUAL_CSS.replace(b'rgb(0 0 0 / 1) calc(100% - 1px)', b'rgb(0 0 0 / 1) calc(100% - 2px)'), source_css=DUAL_SOURCE)
+            self.inspect(DUAL_CSS.replace(b'rgb(0 0 0 / .92) calc(100% - 1px)', b'rgb(0 0 0 / .92) calc(100% - 2px)'), source_css=DUAL_SOURCE)
 
     def test_dual_wave_rejects_simultaneous_blackout(self):
         with self.assertRaisesRegex(ValueError, 'complementaryPresencePhase'):
