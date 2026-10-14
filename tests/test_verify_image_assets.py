@@ -18,6 +18,9 @@ BRIGHT_SOURCE = (ROOT / 'tests/fixtures/brighter-divider-source.css').read_text(
 SPECTRAL_CSS = (ROOT / 'tests/fixtures/spectral-frontend.css').read_bytes()
 SPECTRAL_SOURCE = (ROOT / 'tests/fixtures/spectral-divider-source.css').read_text()
 
+LIVING_CSS = (ROOT / 'tests/fixtures/living-frontend.css').read_bytes()
+LIVING_SOURCE = (ROOT / 'tests/fixtures/living-divider-source.css').read_text()
+
 
 class FrontendVerificationTests(unittest.TestCase):
     def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=None):
@@ -87,6 +90,18 @@ class FrontendVerificationTests(unittest.TestCase):
     def test_quiz_javascript_check_is_preserved(self):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
+
+    def test_living_wave_matches_pins(self):
+        report = self.inspect(LIVING_CSS, source_css=LIVING_SOURCE)
+        self.assertEqual(report['frontend']['dividerProfile'], 'living-thin-core')
+
+    def test_living_wave_rejects_synchronized_cycles(self):
+        with self.assertRaisesRegex(ValueError, 'blueIndependentCycle'):
+            self.inspect(LIVING_CSS.replace(b'lms-ai-blue-bloom 47s', b'lms-ai-blue-bloom 37s'), source_css=LIVING_SOURCE)
+
+    def test_static_gradient_cannot_satisfy_living_pins(self):
+        with self.assertRaisesRegex(ValueError, 'tealIndependentCycle'):
+            self.inspect(SPECTRAL_CSS, source_css=LIVING_SOURCE)
 
     def test_spectral_wave_matches_its_pinned_source(self):
         report = self.inspect(SPECTRAL_CSS, source_css=SPECTRAL_SOURCE)

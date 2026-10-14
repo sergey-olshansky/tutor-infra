@@ -104,7 +104,7 @@ def verify_frontend(container, report, source_css=None):
     profile = "task25-original"
     if source_css is not None:
         if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.98\)\s+calc\(100%\s*-\s*1px\)", source_css):
-            profile = "spectral-thin-core"
+            profile = "living-thin-core" if "@property --lms-teal-span" in source_css else "spectral-thin-core"
         elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
             profile = "brighter-thin-core"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
@@ -118,7 +118,7 @@ def verify_frontend(container, report, source_css=None):
             "thinCoreFalloffBoundary": r"(?:#0000007a|rgba\(0,\s*0,\s*0,\s*0?\.48\)|rgb\(0 0 0\s*/\s*0?\.48\))\s+calc\(100%\s*-\s*1px\)",
             "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
         })
-    if profile == "spectral-thin-core":
+    if profile in {"spectral-thin-core", "living-thin-core"}:
         for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
             del assertions[name]
 
@@ -135,6 +135,14 @@ def verify_frontend(container, report, source_css=None):
             "threeCoolHues": r"background-image:linear-gradient\(180deg,#4ac2cc(?:b8|b7),#72a9d6(?:b8|b7) 50%,#a69bd3(?:b8|b7)\)",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
+    if profile == "living-thin-core":
+        del assertions["threeCoolHues"]
+        for colour, period in [("teal", 37), ("blue", 47), ("lavender", 59)]:
+            assertions[f"{colour}IndependentCycle"] = rf"lms-ai-{colour}-bloom\s+{period}s\s+ease-in-out\s+infinite"
+            for prop in ["span", "colour", "center"]:
+                assertions[f"{colour}{prop}Registration"] = rf"@property\s+--lms-{colour}-{prop}\s*\{{"
+                assertions[f"{colour}{prop}Gradient"] = rf"var\(--lms-{colour}-{prop}\)"
+            assertions[f"{colour}BloomKeyframes"] = rf"@keyframes\s+lms-ai-{colour}-bloom\s*\{{.*?50%\s*\{{[^}}]*--lms-{colour}-center:[^}}]*--lms-{colour}-span:[^}}]*--lms-{colour}-colour:"
     for name, expression in assertions.items():
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")

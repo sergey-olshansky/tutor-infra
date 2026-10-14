@@ -1,0 +1,154 @@
+@property --lms-teal-center {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 26%;
+}
+@property --lms-teal-span {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 22%;
+}
+@property --lms-teal-colour {
+	syntax: "<color>";
+	inherits: false;
+	initial-value: rgb(61 197 199 / 0.9);
+}
+@property --lms-blue-center {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 50%;
+}
+@property --lms-blue-span {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 24%;
+}
+@property --lms-blue-colour {
+	syntax: "<color>";
+	inherits: false;
+	initial-value: rgb(103 165 224 / 0.9);
+}
+@property --lms-lavender-center {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 74%;
+}
+@property --lms-lavender-span {
+	syntax: "<percentage>";
+	inherits: false;
+	initial-value: 22%;
+}
+@property --lms-lavender-colour {
+	syntax: "<color>";
+	inherits: false;
+	initial-value: rgb(164 147 214 / 0.9);
+}
+/* Shared, non-interactive left-only decoration. Only this 14px layer clips. */
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
+	position: absolute;
+	inset-block: 0;
+	right: 0;
+	width: 14px;
+	overflow: hidden;
+	pointer-events: none;
+	/* A thin 1px colour core and a wider, brighter nonlinear soft
+	   falloff paint inward only; the vertical mask supplies ONE local wave.
+	   Normal source-over compositing keeps colour visible on pale surfaces. */
+	opacity: 1;
+	-webkit-mask-image: linear-gradient(to right,
+		transparent, rgb(0 0 0 / 0.10) 25%, rgb(0 0 0 / 0.30) 50%,
+		rgb(0 0 0 / 0.52) 75%, rgb(0 0 0 / 0.64) calc(100% - 1px),
+		rgb(0 0 0 / 0.98) calc(100% - 1px));
+	mask-image: linear-gradient(to right,
+		transparent, rgb(0 0 0 / 0.10) 25%, rgb(0 0 0 / 0.30) 50%,
+		rgb(0 0 0 / 0.52) 75%, rgb(0 0 0 / 0.64) calc(100% - 1px),
+		rgb(0 0 0 / 0.98) calc(100% - 1px));
+}
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 -100%;
+	background-color: #49aeb8;
+	/* Three simultaneous colour blooms share one travelling wave. Each bloom
+	   changes its own height and shade on a different, seamless cycle. */
+	background-image:
+		linear-gradient(180deg, transparent calc(var(--lms-teal-center) - var(--lms-teal-span)),
+			var(--lms-teal-colour) var(--lms-teal-center), transparent calc(var(--lms-teal-center) + var(--lms-teal-span))),
+		linear-gradient(180deg, transparent calc(var(--lms-blue-center) - var(--lms-blue-span)),
+			var(--lms-blue-colour) var(--lms-blue-center), transparent calc(var(--lms-blue-center) + var(--lms-blue-span))),
+		linear-gradient(180deg, transparent calc(var(--lms-lavender-center) - var(--lms-lavender-span)),
+			var(--lms-lavender-colour) var(--lms-lavender-center), transparent calc(var(--lms-lavender-center) + var(--lms-lavender-span)));
+	background-size: 100% 50%;
+	/* One broad, slightly asymmetric intensity envelope per surface height.
+	   Repeated identical tiles and a one-tile translation join seamlessly.
+	   Each point brightens and fades as this single wave passes. */
+	-webkit-mask-image: linear-gradient(
+		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
+		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
+		rgb(0 0 0 / 0.82) 42%, #000 50%,
+		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
+		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
+	);
+	mask-image: linear-gradient(
+		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
+		rgb(0 0 0 / 0.22) 18%, rgb(0 0 0 / 0.5) 30%,
+		rgb(0 0 0 / 0.82) 42%, #000 50%,
+		rgb(0 0 0 / 0.96) 58%, rgb(0 0 0 / 0.76) 70%,
+		rgb(0 0 0 / 0.44) 82%, rgb(0 0 0 / 0.18) 92%, transparent
+	);
+	-webkit-mask-size: 100% 50%;
+	mask-size: 100% 50%;
+	animation:
+		lms-ai-wave 48s linear(
+			0, 0.1112 10%, 0.2187 20%, 0.3182 30%, 0.4112 40%,
+			0.5 50%, 0.5888 60%, 0.6818 70%, 0.7813 80%, 0.8888 90%, 1
+		)
+		infinite,
+		lms-ai-hue 48s ease-in-out infinite,
+		lms-ai-breathe 19s ease-in-out infinite,
+		lms-ai-teal-bloom 37s ease-in-out infinite,
+		lms-ai-blue-bloom 47s ease-in-out infinite,
+		lms-ai-lavender-bloom 59s ease-in-out infinite;
+}
+@keyframes lms-ai-wave {
+	from {
+		transform: translateY(-50%);
+	}
+	to {
+		transform: translateY(0);
+	}
+}
+@keyframes lms-ai-breathe {
+	0%, 100% { opacity: 0.94; }
+	50% { opacity: 1; }
+}
+@keyframes lms-ai-hue {
+	0%, 100% { background-color: #49aeb8; }
+	33.333333% { background-color: #739fcb; }
+	66.666667% { background-color: #a399cb; }
+}
+@media (prefers-reduced-motion: reduce) {
+	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
+		animation: none;
+	}
+}
+@supports not (
+	(mask-image: linear-gradient(to right, transparent, #000)) or
+		(-webkit-mask-image: linear-gradient(to right, transparent, #000))
+) {
+	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
+		display: none;
+	}
+}
+@keyframes lms-ai-teal-bloom {
+	0%, 100% { --lms-teal-center: 26%; --lms-teal-span: 22%; --lms-teal-colour: rgb(61 197 199 / 0.9); }
+	50% { --lms-teal-center: 34%; --lms-teal-span: 34%; --lms-teal-colour: rgb(83 174 216 / 0.9); }
+}
+@keyframes lms-ai-blue-bloom {
+	0%, 100% { --lms-blue-center: 50%; --lms-blue-span: 24%; --lms-blue-colour: rgb(103 165 224 / 0.9); }
+	50% { --lms-blue-center: 43%; --lms-blue-span: 15%; --lms-blue-colour: rgb(145 155 222 / 0.9); }
+}
+@keyframes lms-ai-lavender-bloom {
+	0%, 100% { --lms-lavender-center: 74%; --lms-lavender-span: 22%; --lms-lavender-colour: rgb(164 147 214 / 0.9); }
+	50% { --lms-lavender-center: 66%; --lms-lavender-span: 32%; --lms-lavender-colour: rgb(121 176 211 / 0.9); }
+}
