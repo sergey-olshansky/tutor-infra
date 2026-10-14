@@ -16,12 +16,12 @@
 @property --lms-third-gain {
 	syntax: "<number>";
 	inherits: false;
-	initial-value: 0.7;
+	initial-value: 0.775;
 }
 @property --lms-third-width {
 	syntax: "<length>";
 	inherits: false;
-	initial-value: 22px;
+	initial-value: 30px;
 }
 @property --lms-stream-width {
 	syntax: "<length>";
@@ -103,12 +103,12 @@
 	inherits: false;
 	initial-value: rgb(164 147 214 / 0.9);
 }
-/* Shared, non-interactive left-only decoration. Only this 27px envelope clips. */
+/* Shared, non-interactive left-only decoration. Only this 42px envelope clips. */
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
 	position: absolute;
 	inset-block: 0;
 	right: 0;
-	width: 27px;
+	width: 42px;
 	overflow: hidden;
 	/* Isolate only this decoration, so light can mix without trapping UI. */
 	isolation: isolate;
@@ -280,7 +280,8 @@
    first pair alternates. Registered properties let random changes melt in. */
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-stream-third {
 	width: var(--lms-third-width);
-	opacity: calc(var(--lms-third-gain) * 0.55);
+	filter: brightness(calc(1.04 * var(--lms-breath))) saturate(90%);
+	opacity: calc(var(--lms-third-gain) * 0.6);
 	background-color: rgb(89 146 175 / 0.35);
 	background-image: linear-gradient(180deg,
 		transparent calc(var(--lms-third-center) - var(--lms-third-span)),

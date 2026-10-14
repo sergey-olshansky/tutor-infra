@@ -103,7 +103,7 @@ def verify_frontend(container, report, source_css=None):
     # the image. The published original digest remains independently verifiable.
     profile = "task25-original"
     if source_css is not None:
-        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*27px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*42px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
             profile = "three-living-streams"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
             raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
@@ -120,7 +120,7 @@ def verify_frontend(container, report, source_css=None):
             "fine1pxCore": alpha(.92) + r"\s+calc\(100%\s*-\s*1px\)",
             "strongInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
             "coreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*2px\)",
-            "leftOnly27px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*27px\s*[;}]",
+            "leftOnly42px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*42px\s*[;}]",
             "repeatingIntensityMask": r"mask-size:100% 100%,100% 50%,96px 96px",
             "intersectingStreamMasks": r"mask-composite:intersect,intersect",
             "secondStream": r"\.lms-ai-divider:{1,2}after\s*\{",
@@ -133,7 +133,7 @@ def verify_frontend(container, report, source_css=None):
             "softOuterEdge": alpha(.38) + r"\s+calc\(100%\s*-\s*\.25px\),transparent",
             "sandGrain": r"data:image/svg\+xml,.*?feTurbulence",
             "thirdStream": r"\.lms-ai-stream-third\{width:var\(--lms-third-width\)",
-            "thirdVisibilityFloor": r"opacity:calc\(var\(--lms-third-gain\) \* \.55\)",
+            "thirdVisibilityFloor": r"opacity:calc\(var\(--lms-third-gain\) \* \.6\)",
             "thirdTravel": r"animation-name:lms-ai-wave-third,none,lms-ai-breathe",
             "localLightMixing": r"background-blend-mode:screen;mix-blend-mode:screen",
             "driftingGrain": r"lms-ai-sand-drift 83s linear infinite",
