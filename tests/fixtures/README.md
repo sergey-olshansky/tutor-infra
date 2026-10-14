@@ -14,3 +14,11 @@ rejection of stale values, the extra painted layer and missing quiz JS.
 Docker extraction is mocked; these tests never build, start or deploy an image.
 The separate inspection workflow must still verify actual published bytes
 against the exact source SHA and existing immutable image digest.
+
+`brighter-divider-source.css` and `brighter-frontend.css` cover the owner's
+follow-up: 14px halo, 1px core, stronger inward mask. The source fixture is
+copied from LMS commit `61e25f6e0a68cebc21b0f6052d7d8c7b67983be7`;
+the compiled fixture uses the same esbuild transform described above.
+The inspector selects the profile from the exact source CSS already verified
+byte-for-byte against the image. Tests reject cross-matching the old and new
+profiles, unknown source profiles, and an incorrectly widened core.

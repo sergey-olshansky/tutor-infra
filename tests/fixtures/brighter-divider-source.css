@@ -1,0 +1,84 @@
+/* Shared, non-interactive left-only decoration. Only this 14px layer clips. */
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
+	position: absolute;
+	inset-block: 0;
+	right: 0;
+	width: 14px;
+	overflow: hidden;
+	pointer-events: none;
+	/* A thin 1px colour core and a wider, brighter nonlinear soft
+	   falloff paint inward only; the vertical mask supplies ONE local wave.
+	   Normal source-over compositing keeps colour visible on pale surfaces. */
+	opacity: 1;
+	-webkit-mask-image: linear-gradient(to right,
+		transparent, rgb(0 0 0 / 0.06) 25%, rgb(0 0 0 / 0.20) 50%,
+		rgb(0 0 0 / 0.38) 75%, rgb(0 0 0 / 0.48) calc(100% - 1px),
+		rgb(0 0 0 / 0.90) calc(100% - 1px));
+	mask-image: linear-gradient(to right,
+		transparent, rgb(0 0 0 / 0.06) 25%, rgb(0 0 0 / 0.20) 50%,
+		rgb(0 0 0 / 0.38) 75%, rgb(0 0 0 / 0.48) calc(100% - 1px),
+		rgb(0 0 0 / 0.90) calc(100% - 1px));
+}
+:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
+	content: "";
+	position: absolute;
+	inset: 0 0 -100%;
+	background-color: #49aeb8;
+	/* One broad, slightly asymmetric intensity envelope per surface height.
+	   Repeated identical tiles and a one-tile translation join seamlessly.
+	   Each point brightens and fades as this single wave passes. */
+	-webkit-mask-image: linear-gradient(
+		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
+		rgb(0 0 0 / 0.16) 18%, rgb(0 0 0 / 0.4) 30%,
+		rgb(0 0 0 / 0.74) 42%, #000 50%,
+		rgb(0 0 0 / 0.9) 58%, rgb(0 0 0 / 0.64) 70%,
+		rgb(0 0 0 / 0.34) 82%, rgb(0 0 0 / 0.12) 92%, transparent
+	);
+	mask-image: linear-gradient(
+		180deg, transparent, rgb(0 0 0 / 0.04) 8%,
+		rgb(0 0 0 / 0.16) 18%, rgb(0 0 0 / 0.4) 30%,
+		rgb(0 0 0 / 0.74) 42%, #000 50%,
+		rgb(0 0 0 / 0.9) 58%, rgb(0 0 0 / 0.64) 70%,
+		rgb(0 0 0 / 0.34) 82%, rgb(0 0 0 / 0.12) 92%, transparent
+	);
+	-webkit-mask-size: 100% 50%;
+	mask-size: 100% 50%;
+	animation:
+		lms-ai-wave 48s linear(
+			0, 0.1112 10%, 0.2187 20%, 0.3182 30%, 0.4112 40%,
+			0.5 50%, 0.5888 60%, 0.6818 70%, 0.7813 80%, 0.8888 90%, 1
+		)
+		infinite,
+		lms-ai-hue 48s ease-in-out infinite,
+		lms-ai-breathe 19s ease-in-out infinite;
+}
+@keyframes lms-ai-wave {
+	from {
+		transform: translateY(-50%);
+	}
+	to {
+		transform: translateY(0);
+	}
+}
+@keyframes lms-ai-breathe {
+	0%, 100% { opacity: 0.88; }
+	50% { opacity: 1; }
+}
+@keyframes lms-ai-hue {
+	0%, 100% { background-color: #49aeb8; }
+	33.333333% { background-color: #739fcb; }
+	66.666667% { background-color: #a399cb; }
+}
+@media (prefers-reduced-motion: reduce) {
+	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider::before {
+		animation: none;
+	}
+}
+@supports not (
+	(mask-image: linear-gradient(to right, transparent, #000)) or
+		(-webkit-mask-image: linear-gradient(to right, transparent, #000))
+) {
+	:is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
+		display: none;
+	}
+}

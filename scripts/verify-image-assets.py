@@ -44,7 +44,7 @@ class AssetReferences(HTMLParser):
             self.paths.add(attrs.get("href", ""))
 
 
-def verify_frontend(container, report):
+def verify_frontend(container, report, source_css=None):
     html_path = f"{BENCH}/apps/lms/lms/www/_lms.html"
     member, html = copy_member(container, html_path)
     if not member.isfile():
@@ -99,6 +99,23 @@ def verify_frontend(container, report):
         "travellingTransform": r"translateY\(-50%\)",
         "reducedMotion": r"prefers-reduced-motion\s*:\s*reduce",
     }
+    # Select pins from the exact source whose bytes were already checked in
+    # the image. Keep older immutable task images verifiable as well.
+    profile = "task25-original"
+    if source_css is not None:
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
+            profile = "brighter-thin-core"
+        elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
+            raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
+    if profile == "brighter-thin-core":
+        for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
+            del assertions[name]
+        assertions.update({
+            "visible1pxCore": r"(?:#000000e6|rgba\(0,\s*0,\s*0,\s*0?\.9\)|rgb\(0 0 0\s*/\s*0?\.9\))\s+calc\(100%\s*-\s*1px\)",
+            "brighterInwardFalloff": r"(?:#0000000f|rgba\(0,\s*0,\s*0,\s*0?\.06\)|rgb\(0 0 0\s*/\s*0?\.06\))\s+25%.*?(?:#0003|#00000033|rgba\(0,\s*0,\s*0,\s*0?\.2\)|rgb\(0 0 0\s*/\s*0?\.2\))\s+50%.*?(?:#00000061|rgba\(0,\s*0,\s*0,\s*0?\.38\)|rgb\(0 0 0\s*/\s*0?\.38\))\s+75%",
+            "thinCoreFalloffBoundary": r"(?:#0000007a|rgba\(0,\s*0,\s*0,\s*0?\.48\)|rgb\(0 0 0\s*/\s*0?\.48\))\s+calc\(100%\s*-\s*1px\)",
+            "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
+        })
     for name, expression in assertions.items():
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
@@ -118,7 +135,7 @@ def verify_frontend(container, report):
         raise ValueError("Packaged quiz JS lacks secondary Check and primary Finish signatures")
     report["quizJavascript"] = js_assets
     report["frontend"] = {"htmlPath": html_path, "htmlSha256": digest(html),
-                          "assets": assets, "waveAssertions": list(assertions)}
+                          "assets": assets, "waveAssertions": list(assertions), "dividerProfile": profile}
 
 
 def main():
@@ -184,7 +201,7 @@ def main():
             raise ValueError(f"Invalid LMS served asset target: {target}")
         report["servedAssetRoot"] = {"path": "/assets/lms", "packagedLink": member.linkname, "runtimeTarget": target}
         if (args.source / "lms/public/css/mytutor-common.css").is_file():
-            verify_frontend(container, report)
+            verify_frontend(container, report, (args.source / "lms/public/css/mytutor-common.css").read_text())
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2))

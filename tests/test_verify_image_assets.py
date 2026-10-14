@@ -12,10 +12,12 @@ spec = importlib.util.spec_from_file_location('verify_image_assets', ROOT / 'scr
 verify = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify)
 CSS = (ROOT / 'tests/fixtures/task25-frontend.css').read_bytes()
+BRIGHT_CSS = (ROOT / 'tests/fixtures/brighter-frontend.css').read_bytes()
+BRIGHT_SOURCE = (ROOT / 'tests/fixtures/brighter-divider-source.css').read_text()
 
 
 class FrontendVerificationTests(unittest.TestCase):
-    def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"'):
+    def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=None):
         html = b'<script src="/assets/lms/frontend/assets/index.js"></script><link rel="stylesheet" href="/assets/lms/frontend/assets/index.css">'
         files = {
             f'{verify.BENCH}/apps/lms/lms/www/_lms.html': html,
@@ -37,7 +39,7 @@ class FrontendVerificationTests(unittest.TestCase):
         result = subprocess.CompletedProcess([], 0, stdout=archive.getvalue())
         report = {}
         with patch.object(verify, 'copy_member', side_effect=member), patch.object(verify.subprocess, 'run', return_value=result) as docker:
-            verify.verify_frontend('unstarted-inspection-container', report)
+            verify.verify_frontend('unstarted-inspection-container', report, source_css)
             self.assertEqual(docker.call_args.args[0][:2], ['docker', 'cp'])
         return report
 
@@ -82,6 +84,28 @@ class FrontendVerificationTests(unittest.TestCase):
     def test_quiz_javascript_check_is_preserved(self):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
+
+    def test_brighter_wave_is_verified_against_its_own_pinned_source(self):
+        report = self.inspect(BRIGHT_CSS, source_css=BRIGHT_SOURCE)
+        self.assertEqual(report['frontend']['dividerProfile'], 'brighter-thin-core')
+        self.assertIn('visible1pxCore', report['frontend']['waveAssertions'])
+        self.assertIn('leftOnly14px', report['frontend']['waveAssertions'])
+
+    def test_old_compiled_wave_cannot_satisfy_new_pinned_source(self):
+        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
+            self.inspect(CSS, source_css=BRIGHT_SOURCE)
+
+    def test_new_wave_cannot_satisfy_old_pins(self):
+        with self.assertRaisesRegex(ValueError, 'visible2pxCore'):
+            self.inspect(BRIGHT_CSS)
+
+    def test_unknown_source_profile_requires_explicit_expectations(self):
+        with self.assertRaisesRegex(ValueError, 'Unrecognized pinned divider'):
+            self.inspect(BRIGHT_CSS, source_css=BRIGHT_SOURCE.replace('width: 14px', 'width: 99px'))
+
+    def test_new_wave_rejects_a_wider_core(self):
+        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
+            self.inspect(BRIGHT_CSS.replace(b'100% - 1px', b'100% - 2px'), source_css=BRIGHT_SOURCE)
 
 
 if __name__ == '__main__':
