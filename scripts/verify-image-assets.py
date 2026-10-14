@@ -103,7 +103,9 @@ def verify_frontend(container, report, source_css=None):
     # the image. Keep older immutable task images verifiable as well.
     profile = "task25-original"
     if source_css is not None:
-        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.98\)\s+calc\(100%\s*-\s*1px\)", source_css):
+            profile = "spectral-thin-core"
+        elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
             profile = "brighter-thin-core"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
             raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
@@ -115,6 +117,23 @@ def verify_frontend(container, report, source_css=None):
             "brighterInwardFalloff": r"(?:#0000000f|rgba\(0,\s*0,\s*0,\s*0?\.06\)|rgb\(0 0 0\s*/\s*0?\.06\))\s+25%.*?(?:#0003|#00000033|rgba\(0,\s*0,\s*0,\s*0?\.2\)|rgb\(0 0 0\s*/\s*0?\.2\))\s+50%.*?(?:#00000061|rgba\(0,\s*0,\s*0,\s*0?\.38\)|rgb\(0 0 0\s*/\s*0?\.38\))\s+75%",
             "thinCoreFalloffBoundary": r"(?:#0000007a|rgba\(0,\s*0,\s*0,\s*0?\.48\)|rgb\(0 0 0\s*/\s*0?\.48\))\s+calc\(100%\s*-\s*1px\)",
             "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
+        })
+    if profile == "spectral-thin-core":
+        for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
+            del assertions[name]
+
+        def alpha(value):
+            byte = round(value * 255)
+            decimal = re.escape(str(value)[1:])
+            return rf"(?:#000000{byte:02x}|rgba\(0,\s*0,\s*0,\s*0?{decimal}\)|rgb\(0 0 0\s*/\s*0?{decimal}\))"
+
+        assertions.update({
+            "visible1pxCore": alpha(.98) + r"\s+calc\(100%\s*-\s*1px\)",
+            "spectralInwardFalloff": alpha(.1) + r"\s+25%.*?" + alpha(.3) + r"\s+50%.*?" + alpha(.52) + r"\s+75%",
+            "thinCoreFalloffBoundary": alpha(.64) + r"\s+calc\(100%\s*-\s*1px\)",
+            "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
+            "threeCoolHues": r"background-image:linear-gradient\(180deg,#4ac2cc(?:b8|b7),#72a9d6(?:b8|b7) 50%,#a69bd3(?:b8|b7)\)",
+            "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
     for name, expression in assertions.items():
         if not re.search(expression, combined):

@@ -15,6 +15,9 @@ CSS = (ROOT / 'tests/fixtures/task25-frontend.css').read_bytes()
 BRIGHT_CSS = (ROOT / 'tests/fixtures/brighter-frontend.css').read_bytes()
 BRIGHT_SOURCE = (ROOT / 'tests/fixtures/brighter-divider-source.css').read_text()
 
+SPECTRAL_CSS = (ROOT / 'tests/fixtures/spectral-frontend.css').read_bytes()
+SPECTRAL_SOURCE = (ROOT / 'tests/fixtures/spectral-divider-source.css').read_text()
+
 
 class FrontendVerificationTests(unittest.TestCase):
     def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=None):
@@ -84,6 +87,19 @@ class FrontendVerificationTests(unittest.TestCase):
     def test_quiz_javascript_check_is_preserved(self):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
+
+    def test_spectral_wave_matches_its_pinned_source(self):
+        report = self.inspect(SPECTRAL_CSS, source_css=SPECTRAL_SOURCE)
+        self.assertEqual(report['frontend']['dividerProfile'], 'spectral-thin-core')
+        self.assertIn('threeCoolHues', report['frontend']['waveAssertions'])
+
+    def test_spectral_wave_requires_all_three_colours(self):
+        with self.assertRaisesRegex(ValueError, 'threeCoolHues'):
+            self.inspect(SPECTRAL_CSS.replace(b'#72a9d6b8', b'#ffffffb8'), source_css=SPECTRAL_SOURCE)
+
+    def test_previous_wave_cannot_satisfy_spectral_pins(self):
+        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
+            self.inspect(BRIGHT_CSS, source_css=SPECTRAL_SOURCE)
 
     def test_brighter_wave_is_verified_against_its_own_pinned_source(self):
         report = self.inspect(BRIGHT_CSS, source_css=BRIGHT_SOURCE)
