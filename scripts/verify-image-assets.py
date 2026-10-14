@@ -74,10 +74,13 @@ def verify_frontend(container, report):
     combined = "\n".join(css)
     assertions = {
         "waveKeyframes": r"@keyframes\s+lms-ai-wave\s*\{",
-        "waveAnimation24s": r"animation\s*:\s*lms-ai-wave\s+24s\s+linear\s+infinite",
+        "waveAnimation48s": r"animation\s*:\s*lms-ai-wave\s+48s\s+linear\([^)]*\)\s+infinite",
+        "variableWaveTiming": r"linear\(\s*0\s*,\s*0?\.1112\s+10%\s*,\s*0?\.2187\s+20%\s*,\s*0?\.3182\s+30%\s*,\s*0?\.4112\s+40%\s*,\s*0?\.5\s+50%\s*,\s*0?\.5888\s+60%\s*,\s*0?\.6818\s+70%\s*,\s*0?\.7813\s+80%\s*,\s*0?\.8888\s+90%\s*,\s*1\s*\)",
         "dividerSelector": r"\.lms-ai-divider",
         "singleWaveHueKeyframes": r"@keyframes\s+lms-ai-hue\s*\{",
-        "singleWaveHueAnimation": r"lms-ai-hue\s+24s\s+ease-in-out\s+infinite",
+        "singleWaveHueAnimation48s": r"lms-ai-hue\s+48s\s+ease-in-out\s+infinite",
+        "breatheKeyframes": r"@keyframes\s+lms-ai-breathe\s*\{",
+        "breatheAnimation19s": r"lms-ai-breathe\s+19s\s+ease-in-out\s+infinite",
         "tealWavePeak": r"#49aeb8",
         "blueWavePeak": r"#739fcb",
         "lavenderWavePeak": r"#a399cb",
@@ -92,7 +95,7 @@ def verify_frontend(container, report):
         "secondaryHover": r"\.lms-quiz-secondary:hover:not\(:disabled\)",
         "secondaryDisabled": r"\.lms-quiz-secondary:disabled\s*\{[^}]*background\s*:\s*var\(--lms-secondary\)",
         "secondaryFocus": r"lms-quiz-secondary[^}]*:focus-visible",
-        "leftOnly14px": r"width\s*:\s*14px",
+        "leftOnly12px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*[;}]",
         "travellingTransform": r"translateY\(-50%\)",
         "reducedMotion": r"prefers-reduced-motion\s*:\s*reduce",
     }
@@ -100,7 +103,7 @@ def verify_frontend(container, report):
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
     if re.search(r"lms-ai-wave-blue|\.lms-ai-divider:{1,2}after", combined):
-        raise ValueError("Compiled R7 CSS contains a second painted wave layer")
+        raise ValueError("Compiled frontend CSS contains a second painted wave layer")
     # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
     result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
     js_assets = []

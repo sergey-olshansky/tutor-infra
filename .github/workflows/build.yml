@@ -63,6 +63,8 @@ jobs:
           repository: sergey-olshansky/lms
           ref: ${{ inputs.lms_sha }}
           path: inspection-source
+      - name: Test image inspection assertions
+        run: python3 -m unittest discover -s tests -v
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
