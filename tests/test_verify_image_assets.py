@@ -12,17 +12,8 @@ spec = importlib.util.spec_from_file_location('verify_image_assets', ROOT / 'scr
 verify = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify)
 CSS = (ROOT / 'tests/fixtures/task25-frontend.css').read_bytes()
-BRIGHT_CSS = (ROOT / 'tests/fixtures/brighter-frontend.css').read_bytes()
-BRIGHT_SOURCE = (ROOT / 'tests/fixtures/brighter-divider-source.css').read_text()
-
-SPECTRAL_CSS = (ROOT / 'tests/fixtures/spectral-frontend.css').read_bytes()
-SPECTRAL_SOURCE = (ROOT / 'tests/fixtures/spectral-divider-source.css').read_text()
-
-LIVING_CSS = (ROOT / 'tests/fixtures/living-frontend.css').read_bytes()
-LIVING_SOURCE = (ROOT / 'tests/fixtures/living-divider-source.css').read_text()
-
-CONFIDENT_CSS = (ROOT / 'tests/fixtures/confident-frontend.css').read_bytes()
-CONFIDENT_SOURCE = (ROOT / 'tests/fixtures/confident-divider-source.css').read_text()
+DUAL_CSS = (ROOT / 'tests/fixtures/dual-frontend.css').read_bytes()
+DUAL_SOURCE = (ROOT / 'tests/fixtures/dual-divider-source.css').read_text()
 
 
 class FrontendVerificationTests(unittest.TestCase):
@@ -94,64 +85,33 @@ class FrontendVerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
 
-    def test_confident_living_wave_matches_pins(self):
-        report = self.inspect(CONFIDENT_CSS, source_css=CONFIDENT_SOURCE)
-        self.assertEqual(report['frontend']['dividerProfile'], 'confident-living-core')
+    def test_dual_wave_matches_its_pinned_source(self):
+        report = self.inspect(DUAL_CSS, source_css=DUAL_SOURCE)
+        self.assertEqual(report['frontend']['dividerProfile'], 'dual-living-streams')
 
-    def test_confident_wave_rejects_a_narrower_core(self):
-        with self.assertRaisesRegex(ValueError, 'confident2pxCore'):
-            self.inspect(CONFIDENT_CSS.replace(b'rgb(0 0 0 / 1) calc(100% - 2px)', b'rgb(0 0 0 / 1) calc(100% - 1px)'), source_css=CONFIDENT_SOURCE)
-
-    def test_confident_wave_rejects_old_width(self):
-        with self.assertRaisesRegex(ValueError, 'leftOnly18px'):
-            self.inspect(CONFIDENT_CSS.replace(b'width:18px', b'width:14px'), source_css=CONFIDENT_SOURCE)
-
-    def test_living_wave_matches_pins(self):
-        report = self.inspect(LIVING_CSS, source_css=LIVING_SOURCE)
-        self.assertEqual(report['frontend']['dividerProfile'], 'living-thin-core')
-
-    def test_living_wave_rejects_synchronized_cycles(self):
+    def test_dual_wave_rejects_synchronized_colour_cycles(self):
         with self.assertRaisesRegex(ValueError, 'blueIndependentCycle'):
-            self.inspect(LIVING_CSS.replace(b'lms-ai-blue-bloom 47s', b'lms-ai-blue-bloom 37s'), source_css=LIVING_SOURCE)
+            self.inspect(DUAL_CSS.replace(b'lms-ai-blue-bloom 47s', b'lms-ai-blue-bloom 37s'), source_css=DUAL_SOURCE)
 
-    def test_static_gradient_cannot_satisfy_living_pins(self):
-        with self.assertRaisesRegex(ValueError, 'tealIndependentCycle'):
-            self.inspect(SPECTRAL_CSS, source_css=LIVING_SOURCE)
+    def test_dual_wave_rejects_a_narrower_core(self):
+        with self.assertRaisesRegex(ValueError, 'confident2pxCore'):
+            self.inspect(DUAL_CSS.replace(b'rgb(0 0 0 / 1) calc(100% - 2px)', b'rgb(0 0 0 / 1) calc(100% - 1px)'), source_css=DUAL_SOURCE)
 
-    def test_spectral_wave_matches_its_pinned_source(self):
-        report = self.inspect(SPECTRAL_CSS, source_css=SPECTRAL_SOURCE)
-        self.assertEqual(report['frontend']['dividerProfile'], 'spectral-thin-core')
-        self.assertIn('threeCoolHues', report['frontend']['waveAssertions'])
+    def test_dual_wave_rejects_simultaneous_blackout(self):
+        with self.assertRaisesRegex(ValueError, 'complementaryPresencePhase'):
+            self.inspect(DUAL_CSS.replace(b'-8s,-20.5s', b'-8s,0s'), source_css=DUAL_SOURCE)
 
-    def test_spectral_wave_requires_all_three_colours(self):
-        with self.assertRaisesRegex(ValueError, 'threeCoolHues'):
-            self.inspect(SPECTRAL_CSS.replace(b'#72a9d6b8', b'#ffffffb8'), source_css=SPECTRAL_SOURCE)
+    def test_old_image_cannot_satisfy_new_source(self):
+        with self.assertRaises(ValueError):
+            self.inspect(CSS, source_css=DUAL_SOURCE)
 
-    def test_previous_wave_cannot_satisfy_spectral_pins(self):
-        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
-            self.inspect(BRIGHT_CSS, source_css=SPECTRAL_SOURCE)
+    def test_new_image_cannot_satisfy_old_source(self):
+        with self.assertRaises(ValueError):
+            self.inspect(DUAL_CSS)
 
-    def test_brighter_wave_is_verified_against_its_own_pinned_source(self):
-        report = self.inspect(BRIGHT_CSS, source_css=BRIGHT_SOURCE)
-        self.assertEqual(report['frontend']['dividerProfile'], 'brighter-thin-core')
-        self.assertIn('visible1pxCore', report['frontend']['waveAssertions'])
-        self.assertIn('leftOnly14px', report['frontend']['waveAssertions'])
-
-    def test_old_compiled_wave_cannot_satisfy_new_pinned_source(self):
-        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
-            self.inspect(CSS, source_css=BRIGHT_SOURCE)
-
-    def test_new_wave_cannot_satisfy_old_pins(self):
-        with self.assertRaisesRegex(ValueError, 'visible2pxCore'):
-            self.inspect(BRIGHT_CSS)
-
-    def test_unknown_source_profile_requires_explicit_expectations(self):
+    def test_unknown_source_profile_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Unrecognized pinned divider'):
-            self.inspect(BRIGHT_CSS, source_css=BRIGHT_SOURCE.replace('width: 14px', 'width: 99px'))
-
-    def test_new_wave_rejects_a_wider_core(self):
-        with self.assertRaisesRegex(ValueError, 'visible1pxCore'):
-            self.inspect(BRIGHT_CSS.replace(b'100% - 1px', b'100% - 2px'), source_css=BRIGHT_SOURCE)
+            self.inspect(DUAL_CSS, source_css=DUAL_SOURCE.replace('width: 22px', 'width: 99px'))
 
 
 if __name__ == '__main__':

@@ -99,28 +99,15 @@ def verify_frontend(container, report, source_css=None):
         "travellingTransform": r"translateY\(-50%\)",
         "reducedMotion": r"prefers-reduced-motion\s*:\s*reduce",
     }
-    # Select pins from the exact source whose bytes were already checked in
-    # the image. Keep older immutable task images verifiable as well.
+    # Select expectations only from the exact source already compared with
+    # the image. The published original digest remains independently verifiable.
     profile = "task25-original"
     if source_css is not None:
-        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*18px\s*;", source_css) and "rgb(0 0 0 / 1) calc(100% - 2px)" in source_css and "@property --lms-teal-span" in source_css:
-            profile = "confident-living-core"
-        elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.98\)\s+calc\(100%\s*-\s*1px\)", source_css):
-            profile = "living-thin-core" if "@property --lms-teal-span" in source_css else "spectral-thin-core"
-        elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
-            profile = "brighter-thin-core"
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*22px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
+            profile = "dual-living-streams"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
             raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
-    if profile == "brighter-thin-core":
-        for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
-            del assertions[name]
-        assertions.update({
-            "visible1pxCore": r"(?:#000000e6|rgba\(0,\s*0,\s*0,\s*0?\.9\)|rgb\(0 0 0\s*/\s*0?\.9\))\s+calc\(100%\s*-\s*1px\)",
-            "brighterInwardFalloff": r"(?:#0000000f|rgba\(0,\s*0,\s*0,\s*0?\.06\)|rgb\(0 0 0\s*/\s*0?\.06\))\s+25%.*?(?:#0003|#00000033|rgba\(0,\s*0,\s*0,\s*0?\.2\)|rgb\(0 0 0\s*/\s*0?\.2\))\s+50%.*?(?:#00000061|rgba\(0,\s*0,\s*0,\s*0?\.38\)|rgb\(0 0 0\s*/\s*0?\.38\))\s+75%",
-            "thinCoreFalloffBoundary": r"(?:#0000007a|rgba\(0,\s*0,\s*0,\s*0?\.48\)|rgb\(0 0 0\s*/\s*0?\.48\))\s+calc\(100%\s*-\s*1px\)",
-            "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
-        })
-    if profile in {"spectral-thin-core", "living-thin-core", "confident-living-core"}:
+    if profile == "dual-living-streams":
         for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
             del assertions[name]
 
@@ -130,24 +117,20 @@ def verify_frontend(container, report, source_css=None):
             return rf"(?:#000000{byte:02x}|rgba\(0,\s*0,\s*0,\s*0?{decimal}\)|rgb\(0 0 0\s*/\s*0?{decimal}\))"
 
         assertions.update({
-            "visible1pxCore": alpha(.98) + r"\s+calc\(100%\s*-\s*1px\)",
-            "spectralInwardFalloff": alpha(.1) + r"\s+25%.*?" + alpha(.3) + r"\s+50%.*?" + alpha(.52) + r"\s+75%",
-            "thinCoreFalloffBoundary": alpha(.64) + r"\s+calc\(100%\s*-\s*1px\)",
-            "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
-            "threeCoolHues": r"background-image:linear-gradient\(180deg,#4ac2cc(?:b8|b7),#72a9d6(?:b8|b7) 50%,#a69bd3(?:b8|b7)\)",
+            "confident2pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*2px\)",
+            "strongInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
+            "coreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*2px\)",
+            "leftOnly22px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*22px\s*[;}]",
+            "repeatingIntensityMask": r"mask-size:100% 100%,100% 50%",
+            "intersectingStreamMasks": r"mask-composite:intersect",
+            "secondStream": r"\.lms-ai-divider:{1,2}after\s*\{",
+            "opposingStreamMotion": r"animation-direction:reverse,normal,normal,normal,reverse,normal,normal,normal",
+            "sharedPresencePeriod": r"lms-ai-presence 41s ease-in-out infinite",
+            "complementaryPresencePhase": r"animation-delay:-30\.5s,-19s,-8s,-20\.5s",
+            "secondPresencePeriod": r"animation-duration:61s,67s,23s,41s",
+            "presenceExtremes": r"@keyframes lms-ai-presence\{0%,(?:100%|to)\{opacity:1\}50%\{opacity:0\}",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
-    if profile == "confident-living-core":
-        del assertions["visible1pxCore"]
-        del assertions["leftOnly14px"]
-        assertions.update({
-            "confident2pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*2px\)",
-            "spectralInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
-            "thinCoreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*2px\)",
-            "leftOnly18px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*18px\s*[;}]",
-        })
-    if profile in {"living-thin-core", "confident-living-core"}:
-        del assertions["threeCoolHues"]
         for colour, period in [("teal", 37), ("blue", 47), ("lavender", 59)]:
             assertions[f"{colour}IndependentCycle"] = rf"lms-ai-{colour}-bloom\s+{period}s\s+ease-in-out\s+infinite"
             for prop in ["span", "colour", "center"]:
@@ -157,7 +140,7 @@ def verify_frontend(container, report, source_css=None):
     for name, expression in assertions.items():
         if not re.search(expression, combined):
             raise ValueError(f"Compiled frontend CSS lacks {name}")
-    if re.search(r"lms-ai-wave-blue|\.lms-ai-divider:{1,2}after", combined):
+    if re.search(r"lms-ai-wave-blue", combined) or (profile == "task25-original" and re.search(r"\.lms-ai-divider:{1,2}after", combined)):
         raise ValueError("Compiled frontend CSS contains a second painted wave layer")
     # Inspect all emitted lazy JS chunks too; Quiz is not necessarily an entry module.
     result = subprocess.run(["docker", "cp", f"{container}:{BENCH}/apps/lms/lms/public/frontend", "-"], check=True, capture_output=True)
