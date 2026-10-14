@@ -21,6 +21,9 @@ SPECTRAL_SOURCE = (ROOT / 'tests/fixtures/spectral-divider-source.css').read_tex
 LIVING_CSS = (ROOT / 'tests/fixtures/living-frontend.css').read_bytes()
 LIVING_SOURCE = (ROOT / 'tests/fixtures/living-divider-source.css').read_text()
 
+CONFIDENT_CSS = (ROOT / 'tests/fixtures/confident-frontend.css').read_bytes()
+CONFIDENT_SOURCE = (ROOT / 'tests/fixtures/confident-divider-source.css').read_text()
+
 
 class FrontendVerificationTests(unittest.TestCase):
     def inspect(self, css=CSS, js=b'"lms-quiz-secondary","Check","lms-quiz-primary"', source_css=None):
@@ -90,6 +93,18 @@ class FrontendVerificationTests(unittest.TestCase):
     def test_quiz_javascript_check_is_preserved(self):
         with self.assertRaisesRegex(ValueError, 'quiz JS lacks'):
             self.inspect(js=b'missing expected action signatures')
+
+    def test_confident_living_wave_matches_pins(self):
+        report = self.inspect(CONFIDENT_CSS, source_css=CONFIDENT_SOURCE)
+        self.assertEqual(report['frontend']['dividerProfile'], 'confident-living-core')
+
+    def test_confident_wave_rejects_a_narrower_core(self):
+        with self.assertRaisesRegex(ValueError, 'confident2pxCore'):
+            self.inspect(CONFIDENT_CSS.replace(b'rgb(0 0 0 / 1) calc(100% - 2px)', b'rgb(0 0 0 / 1) calc(100% - 1px)'), source_css=CONFIDENT_SOURCE)
+
+    def test_confident_wave_rejects_old_width(self):
+        with self.assertRaisesRegex(ValueError, 'leftOnly18px'):
+            self.inspect(CONFIDENT_CSS.replace(b'width:18px', b'width:14px'), source_css=CONFIDENT_SOURCE)
 
     def test_living_wave_matches_pins(self):
         report = self.inspect(LIVING_CSS, source_css=LIVING_SOURCE)

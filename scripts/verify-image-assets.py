@@ -103,7 +103,9 @@ def verify_frontend(container, report, source_css=None):
     # the image. Keep older immutable task images verifiable as well.
     profile = "task25-original"
     if source_css is not None:
-        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.98\)\s+calc\(100%\s*-\s*1px\)", source_css):
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*18px\s*;", source_css) and "rgb(0 0 0 / 1) calc(100% - 2px)" in source_css and "@property --lms-teal-span" in source_css:
+            profile = "confident-living-core"
+        elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.98\)\s+calc\(100%\s*-\s*1px\)", source_css):
             profile = "living-thin-core" if "@property --lms-teal-span" in source_css else "spectral-thin-core"
         elif re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.90\)\s+calc\(100%\s*-\s*1px\)", source_css):
             profile = "brighter-thin-core"
@@ -118,7 +120,7 @@ def verify_frontend(container, report, source_css=None):
             "thinCoreFalloffBoundary": r"(?:#0000007a|rgba\(0,\s*0,\s*0,\s*0?\.48\)|rgb\(0 0 0\s*/\s*0?\.48\))\s+calc\(100%\s*-\s*1px\)",
             "leftOnly14px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*14px\s*[;}]",
         })
-    if profile in {"spectral-thin-core", "living-thin-core"}:
+    if profile in {"spectral-thin-core", "living-thin-core", "confident-living-core"}:
         for name in ["visible2pxCore", "nonlinearInwardFalloff", "coreFalloffBoundary", "leftOnly12px"]:
             del assertions[name]
 
@@ -135,7 +137,16 @@ def verify_frontend(container, report, source_css=None):
             "threeCoolHues": r"background-image:linear-gradient\(180deg,#4ac2cc(?:b8|b7),#72a9d6(?:b8|b7) 50%,#a69bd3(?:b8|b7)\)",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })
-    if profile == "living-thin-core":
+    if profile == "confident-living-core":
+        del assertions["visible1pxCore"]
+        del assertions["leftOnly14px"]
+        assertions.update({
+            "confident2pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*2px\)",
+            "spectralInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
+            "thinCoreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*2px\)",
+            "leftOnly18px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*18px\s*[;}]",
+        })
+    if profile in {"living-thin-core", "confident-living-core"}:
         del assertions["threeCoolHues"]
         for colour, period in [("teal", 37), ("blue", 47), ("lavender", 59)]:
             assertions[f"{colour}IndependentCycle"] = rf"lms-ai-{colour}-bloom\s+{period}s\s+ease-in-out\s+infinite"
