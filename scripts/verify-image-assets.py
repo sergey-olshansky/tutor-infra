@@ -103,7 +103,7 @@ def verify_frontend(container, report, source_css=None):
     # the image. The published original digest remains independently verifiable.
     profile = "task25-original"
     if source_css is not None:
-        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*22px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
+        if re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*27px\s*;", source_css) and "@keyframes lms-ai-presence" in source_css:
             profile = "dual-living-streams"
         elif not (re.search(r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*12px\s*;", source_css) and re.search(r"rgb\(0 0 0 / 0?\.82\)\s+calc\(100%\s*-\s*2px\)", source_css)):
             raise ValueError("Unrecognized pinned divider profile; update inspection expectations explicitly")
@@ -120,7 +120,7 @@ def verify_frontend(container, report, source_css=None):
             "fine1pxCore": r"(?:#000|rgba\(0,\s*0,\s*0,\s*1\)|rgb\(0 0 0\s*/\s*1\))\s+calc\(100%\s*-\s*1px\)",
             "strongInwardFalloff": alpha(.12) + r"\s+25%.*?" + alpha(.36) + r"\s+50%.*?" + alpha(.6) + r"\s+75%",
             "coreFalloffBoundary": alpha(.72) + r"\s+calc\(100%\s*-\s*1px\)",
-            "leftOnly22px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*22px\s*[;}]",
+            "leftOnly27px": r"\.lms-ai-divider\s*\{[^}]*\bwidth\s*:\s*27px\s*[;}]",
             "repeatingIntensityMask": r"mask-size:100% 100%,100% 50%",
             "intersectingStreamMasks": r"mask-composite:intersect",
             "secondStream": r"\.lms-ai-divider:{1,2}after\s*\{",
@@ -130,8 +130,8 @@ def verify_frontend(container, report, source_css=None):
             "secondPresencePeriod": r"animation-duration:61s,67s,23s,41s",
             "presenceExtremes": r"@keyframes lms-ai-presence\{0%,(?:100%|to)\{--lms-presence:\s*1\}50%\{--lms-presence:\s*0\}",
             "variableStreamWidth": r"width:var\(--lms-stream-width\)",
-            "narrowConcentratedLight": r"--lms-stream-width:\s*6px;--lms-density:\s*1;--lms-ink:\s*1\.16;--lms-saturation:\s*115%",
-            "wideDiffusedLight": r"--lms-stream-width:\s*20px;--lms-density:\s*\.45;--lms-ink:\s*1;--lms-saturation:\s*65%",
+            "narrowConcentratedLight": r"--lms-stream-width:\s*10px;--lms-density:\s*1;--lms-ink:\s*1\.16;--lms-saturation:\s*115%",
+            "wideDiffusedLight": r"--lms-stream-width:\s*25px;--lms-density:\s*\.45;--lms-ink:\s*1;--lms-saturation:\s*65%",
             "densityMultipliesPresence": r"opacity:calc\(var\(--lms-presence\) \* var\(--lms-density\)\)",
             "colourEnvelopeAlignment": r"background-size:100% 50%",
         })

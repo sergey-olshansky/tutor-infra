@@ -111,7 +111,7 @@ class FrontendVerificationTests(unittest.TestCase):
 
     def test_unknown_source_profile_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Unrecognized pinned divider'):
-            self.inspect(DUAL_CSS, source_css=DUAL_SOURCE.replace('width: 22px', 'width: 99px'))
+            self.inspect(DUAL_CSS, source_css=DUAL_SOURCE.replace('width: 27px', 'width: 99px'))
 
 
 if __name__ == '__main__':

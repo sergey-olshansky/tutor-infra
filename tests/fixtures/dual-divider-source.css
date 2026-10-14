@@ -1,7 +1,7 @@
 @property --lms-stream-width {
 	syntax: "<length>";
 	inherits: false;
-	initial-value: 6px;
+	initial-value: 10px;
 }
 @property --lms-presence {
 	syntax: "<number>";
@@ -78,12 +78,12 @@
 	inherits: false;
 	initial-value: rgb(164 147 214 / 0.9);
 }
-/* Shared, non-interactive left-only decoration. Only this 22px envelope clips. */
+/* Shared, non-interactive left-only decoration. Only this 27px envelope clips. */
 :is(.lms-tutor-theme, body[data-path="login"]) .lms-ai-divider {
 	position: absolute;
 	inset-block: 0;
 	right: 0;
-	width: 22px;
+	width: 27px;
 	overflow: hidden;
 	pointer-events: none;
 	/* A fine 1px colour core and a wider, brighter nonlinear soft
@@ -218,13 +218,13 @@
 /* A narrow stream concentrates light; a broad one diffuses it. */
 @keyframes lms-ai-width {
 	0%, 100% {
-		--lms-stream-width: 6px;
+		--lms-stream-width: 10px;
 		--lms-density: 1;
 		--lms-ink: 1.16;
 		--lms-saturation: 115%;
 	}
 	50% {
-		--lms-stream-width: 20px;
+		--lms-stream-width: 25px;
 		--lms-density: 0.45;
 		--lms-ink: 1;
 		--lms-saturation: 65%;
