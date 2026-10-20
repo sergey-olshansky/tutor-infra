@@ -118,6 +118,8 @@ jobs:
       TASK_ID: ${{ inputs.task_id }}
       GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Backup production
         run: |
           set -euo pipefail
@@ -155,6 +157,13 @@ jobs:
           echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} 'echo соединение установлено'
+
+      - name: Retain current and incoming production images before pull
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- \
+            prepare /srv/tutor/frappe_docker ghcr.io/sergey-olshansky/tutor-learning "$IMAGE_TAG" \
+            < scripts/retain-production-images.sh
 
       - name: Pull image to production
         run: |
@@ -227,6 +236,13 @@ jobs:
           done
           [[ "$code" == "200" ]] || { echo "::error::Сайт не отвечает после выпуска (код $code)"; exit 1; }
           echo "Сайт отвечает 200"
+
+      - name: Retain released and previous production images
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- \
+            complete /srv/tutor/frappe_docker ghcr.io/sergey-olshansky/tutor-learning "$IMAGE_TAG" \
+            < scripts/retain-production-images.sh
 
 
   post-release:

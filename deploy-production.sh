@@ -8,6 +8,8 @@ readonly SITE="${TUTOR_SITE:-learn.vladastay.ru}"
 readonly IMAGE="${TUTOR_IMAGE:-ghcr.io/sergey-olshansky/tutor-learning}"
 readonly PUBLIC_URL="${TUTOR_PUBLIC_URL:-https://learn.vladastay.ru/lms}"
 readonly GHCR_USER="${TUTOR_GHCR_USER:-sergey-olshansky}"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly RETENTION_SCRIPT="$SCRIPT_DIR/scripts/retain-production-images.sh"
 
 usage() {
 	printf 'Usage: %s <image-tag>\n' "${0##*/}" >&2
@@ -34,6 +36,11 @@ done
 
 gh auth status >/dev/null
 ssh -o BatchMode=yes "$SSH_TARGET" true
+test -f "$RETENTION_SCRIPT"
+
+# Free space before pull while preserving the running image for rollback.
+ssh -o BatchMode=yes "$SSH_TARGET" bash -s -- \
+	prepare "$COMPOSE_DIR" "$IMAGE" "$IMAGE_TAG" < "$RETENTION_SCRIPT"
 
 readonly IMAGE_REF="${IMAGE}:${IMAGE_TAG}"
 printf 'Pulling %s on %s...\n' "$IMAGE_REF" "$SSH_TARGET"
@@ -149,6 +156,8 @@ fi
 printf 'Waiting for %s...\n' "$PUBLIC_URL"
 for attempt in {1..20}; do
 	if curl --fail --silent --show-error --max-time 15 "$PUBLIC_URL" >/dev/null; then
+		ssh -o BatchMode=yes "$SSH_TARGET" bash -s -- \
+			complete "$COMPOSE_DIR" "$IMAGE" "$IMAGE_TAG" < "$RETENTION_SCRIPT"
 		printf 'Production is healthy on %s with tag %s.\n' "$PUBLIC_URL" "$IMAGE_TAG"
 		exit 0
 	fi
