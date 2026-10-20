@@ -4,6 +4,18 @@ run-name: "build-${{ inputs.request_id }}-${{ inputs.lms_sha }}"
 on:
   workflow_dispatch:
     inputs:
+      promote_from:
+        description: "Immutable accepted preprod digest to promote without rebuilding"
+        required: false
+        type: string
+      source_tag:
+        description: "Accepted task image tag with successful build provenance"
+        required: false
+        type: string
+      source_sha:
+        description: "Full accepted preprod LMS SHA for tree equivalence"
+        required: false
+        type: string
       inspect_digest:
         description: "Read-only verification of an existing image digest; skips all build/push steps"
         required: false
@@ -35,7 +47,6 @@ on:
     paths:
       - "apps.json"
       - "Containerfile"
-      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
@@ -81,7 +92,10 @@ jobs:
           path: image-verification/report.json
           if-no-files-found: error
   build:
-    if: ${{ inputs.inspect_digest == '' }}
+    if: ${{ inputs.inspect_digest == '' && inputs.promote_from == '' }}
+    concurrency:
+      group: tutor-build-${{ inputs.lms_sha || inputs.lms_branch || 'tutor-main' }}-${{ inputs.frappe_branch || 'develop' }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
 
     steps:
@@ -123,7 +137,8 @@ jobs:
           git -C frappe_docker/pinned-lms config user.name build-pin
           git -C frappe_docker/pinned-lms config user.email build-pin@users.noreply.github.com
           git -C frappe_docker/pinned-lms add -A
-          git -C frappe_docker/pinned-lms commit -qm "Snapshot LMS $LMS_SHA"
+          GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+            git -C frappe_docker/pinned-lms commit -qm "Snapshot LMS $LMS_SHA"
           git -C frappe_docker/pinned-lms branch -M pinned
           jq --arg url "file:///opt/frappe/pinned-lms" \
             '.[1] = {url: $url, branch: "pinned"}' apps.json > apps.build.json
@@ -133,6 +148,7 @@ jobs:
         shell: bash
         env:
           REQUESTED_TAG: ${{ inputs.image_tag }}
+          FRAPPE_SELECTOR: ${{ inputs.frappe_branch || 'develop' }}
         run: |
           set -euo pipefail
           BRANCH_SLUG=$(printf '%s' "$LMS_BRANCH" | tr '[:upper:]/' '[:lower:]-' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[^a-z0-9]+//; s/[^a-z0-9]+$//' | cut -c1-40)
@@ -157,6 +173,8 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
             TAGS+=$'\n'"${IMAGE}:main"
           fi
+          RECIPE=$({ cat Containerfile apps.json .github/workflows/build.yml scripts/verify-image-assets.py scripts/registry-image.py; git -C frappe_docker rev-parse HEAD; printf '%s' "$FRAPPE_SELECTOR"; } | sha256sum | cut -c1-16)
+          echo "CACHE_TAG=reuse-${LMS_SHA}-${RECIPE}" >> "$GITHUB_ENV"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           echo "TAG=$IMMUTABLE_TAG" >> "$GITHUB_ENV"
           {
@@ -172,10 +190,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve an existing image for identical source and recipe
+        id: reuse
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/registry-image.py resolve --source "$CACHE_TAG" --output image-reuse.json
+
+      - name: Reuse published image bytes
+        if: steps.reuse.outputs.found == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/registry-image.py copy --source "${{ steps.reuse.outputs.digest }}" --target "$TAG" --output image-reuse.json
+
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push image
+        if: steps.reuse.outputs.found != 'true'
         id: image
         uses: docker/build-push-action@v6
         with:
@@ -184,18 +217,20 @@ jobs:
           platforms: linux/amd64
           push: true
 
-          tags: ${{ env.TAGS }}
+          tags: |
+            ${{ env.TAGS }}
+            ${{ env.IMAGE }}:${{ env.CACHE_TAG }}
 
           build-args: |
             FRAPPE_PATH=https://github.com/frappe/frappe
             FRAPPE_BRANCH=${{ inputs.frappe_branch || 'develop' }}
-            CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}-${{ env.LMS_SHA }}
+            CACHE_BUST=${{ env.LMS_SHA }}-${{ env.CACHE_TAG }}
 
           secret-files: |
             apps_json=./apps.json
 
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min,timeout=2m,ignore-error=true
 
       - name: Verify requested commit remains branch tip
         shell: bash
@@ -209,20 +244,95 @@ jobs:
 
       - name: Verify published image bytes and asset paths
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.reuse.outputs.digest || steps.image.outputs.digest }}
         run: |
           python3 scripts/verify-image-assets.py --digest "$IMAGE_DIGEST" --sha "$LMS_SHA" \
             --source frappe_docker/pinned-lms --output image-verification/report.json
 
+      - name: Preserve image reuse decision
+        run: cp image-reuse.json image-verification/reuse.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: image-verification-${{ env.LMS_SHA }}
-          path: image-verification/report.json
+          path: image-verification/
           if-no-files-found: error
 
       - name: Show result
         run: |
-          echo "Built:"
+          echo "Image (built or reused):"
           echo "${IMAGE}:${TAG}"
           echo "LMS branch: ${LMS_BRANCH}"
           echo "LMS commit: ${LMS_SHA}"
+
+  promote:
+    if: ${{ inputs.promote_from != '' && inputs.inspect_digest == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: sergey-olshansky/lms
+          ref: ${{ inputs.lms_sha }}
+          path: promotion-source
+      - name: Verify accepted candidate provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_DIGEST: ${{ inputs.promote_from }}
+        run: |
+          python3 scripts/verify-promotion.py
+
+      - name: Require identical accepted and merged source trees
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET_SHA: ${{ inputs.lms_sha }}
+          SOURCE_DIGEST: ${{ inputs.promote_from }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$SOURCE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$(git ls-remote https://github.com/sergey-olshansky/lms refs/heads/tutor-main | awk '{print $1}')" == "$TARGET_SHA" ]]
+          git -C promotion-source fetch --depth=1 origin "$SOURCE_SHA"
+          SOURCE_TREE=$(git -C promotion-source rev-parse "$SOURCE_SHA^{tree}")
+          TARGET_TREE=$(git -C promotion-source rev-parse "$TARGET_SHA^{tree}")
+          [[ "$SOURCE_TREE" == "$TARGET_TREE" ]] || { echo 'Source changed during merge: a new candidate and acceptance are required'; exit 1; }
+          echo "LMS_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
+          echo "SOURCE_TREE=$SOURCE_TREE" >> "$GITHUB_ENV"
+          echo "TAG=lms-${TARGET_SHA:0:8}-infra-${GITHUB_SHA:0:8}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify accepted image against merged sources
+        env:
+          IMAGE_DIGEST: ${{ inputs.promote_from }}
+        run: |
+          python3 scripts/verify-image-assets.py --digest "$IMAGE_DIGEST" --sha "$LMS_SHA" \
+            --source promotion-source --output image-verification/report.json
+      - name: Publish production tag with identical manifest bytes
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTE_DIGEST: ${{ inputs.promote_from }}
+          ACCEPTED_SHA: ${{ inputs.source_sha }}
+          ACCEPTED_TAG: ${{ inputs.source_tag }}
+        run: |
+          python3 scripts/registry-image.py copy --source "$PROMOTE_DIGEST" --target "$TAG" --output image-verification/promotion.json
+          python3 - <<'PYREPORT'
+          import json, os
+          from pathlib import Path
+          p=Path('image-verification/promotion.json')
+          d=json.loads(p.read_text())
+          d.update(sourceRevision=os.environ['ACCEPTED_SHA'], sourceTag=os.environ['ACCEPTED_TAG'], promotedRevision=os.environ['LMS_SHA'], sourceTree=os.environ['SOURCE_TREE'])
+          p.write_text(json.dumps(d,indent=2)+'\n')
+          PYREPORT
+          echo "Production: ghcr.io/sergey-olshansky/tutor-learning:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest unchanged: $PROMOTE_DIGEST; source tree: $SOURCE_TREE" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-verification-${{ env.LMS_SHA }}
+          path: image-verification/
+          if-no-files-found: error

@@ -104,7 +104,7 @@ jobs:
           DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
           DC up -d --pull never backend websocket frontend scheduler queue-short queue-long 2>&1 | tail -5
           sleep 25
-          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site ${{ secrets.PREPROD_SITE }} migrate" | tail -3 || true
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site ${{ secrets.PREPROD_SITE }} migrate" | tail -3
           DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site ${{ secrets.PREPROD_SITE }} clear-cache" 2>&1 | tail -1
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: ${{ secrets.PREPROD_SITE }}" http://127.0.0.1:8080/api/method/ping || true)
