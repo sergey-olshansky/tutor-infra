@@ -44,3 +44,27 @@ Retention compares image IDs, so aliases of either retained image are safe.
 Images referenced by running or stopped containers are skipped with a warning.
 Docker removal also runs without force. Other image repositories, containers, volumes, site files and backups
 are not pruned. This policy affects local Docker storage, not GHCR history.
+
+## Build once and promote
+
+`build.yml` reuses a GHCR image keyed by the full LMS SHA and build recipe.
+The recipe includes the Containerfile, apps configuration, verification workflow,
+registry tooling, frappe_docker revision and Frappe selector. An existing image
+is copied to the run-specific immutable tag and verified, without compiling.
+The cache-bust value and local pinned-source Git commit are deterministic.
+Duplicate builds for one revision are serialized; the second reuses the image.
+Optional GHA layer-cache export is limited to two minutes and does not block
+a verified image when cache export fails.
+Change the dependency selector/recipe when deliberately refreshing dependencies.
+
+After developer preprod deployment, the human and independent tester inspect
+one SHA/tag/digest in parallel. Both approvals are required before release prep.
+For an accepted candidate whose complete Git tree equals the merge commit tree,
+dispatch `build.yml` on main with `promote_from` (accepted digest), `source_tag`,
+`source_sha` and `lms_sha` (merged SHA). Promotion verifies original successful
+build provenance and its VERIFIED artifact, checks full Git tree equality and
+publishes the production tag by copying the raw manifest bytes. Its digest must
+remain unchanged. A changed merge tree needs a new candidate and both approvals.
+
+Promotion does not deploy production. The normal human release command,
+backup, migration, health and image-retention steps still apply.
