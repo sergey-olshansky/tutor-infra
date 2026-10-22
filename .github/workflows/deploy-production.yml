@@ -227,8 +227,36 @@ jobs:
           REMOTE
 
       - name: Site health check
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SITE: ${{ secrets.PROD_SITE_SECRET }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         run: |
           set -euo pipefail
+          [[ -n "$ZAI_API_KEY" ]] || { echo "::error::Z.AI key is not configured in the production environment"; exit 1; }
+          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PROD_HOST" python3 -c '
+          import json, os, shutil, stat, subprocess, sys, tempfile
+          from pathlib import Path
+          site = sys.argv[1]
+          mount = subprocess.check_output(["docker", "volume", "inspect", "tutor_sites", "--format", "{{.Mountpoint}}"], text=True).strip()
+          path = Path(mount) / site / "site_config.json"
+          secret = sys.stdin.read()
+          if not secret:
+              raise SystemExit("Z.AI key was empty")
+          config = json.loads(path.read_text())
+          config["zai_api_key"] = secret
+          fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".site_config.")
+          try:
+              with os.fdopen(fd, "w") as temp_file:
+                  json.dump(config, temp_file, ensure_ascii=False, indent=1)
+                  temp_file.write("\n")
+              os.chmod(temp_name, stat.S_IMODE(path.stat().st_mode))
+              shutil.chown(temp_name, user=1000, group=1000)
+              os.replace(temp_name, path)
+          finally:
+              if os.path.exists(temp_name):
+                  os.unlink(temp_name)
+          ' "$PROD_SITE"
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 ${{ secrets.PROD_URL }} || true)
             [[ "$code" == "200" ]] && break

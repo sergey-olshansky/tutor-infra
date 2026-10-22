@@ -39,6 +39,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    environment: preprod
     steps:
       - name: Setup SSH
         run: |
@@ -256,6 +257,38 @@ jobs:
           grep -qx 'CLONE_OK' "$RUNNER_TEMP/restore.log" \
             && echo "clone_status=CLONE_OK" >> "$GITHUB_OUTPUT" \
             || { echo "::error::CLONE_OK не подтверждён — прод-данные НЕ склонированы" >&2; echo "clone_status=NOT_CONFIRMED" >> "$GITHUB_OUTPUT"; exit 1; }
+      - name: Configure Z.AI key on preprod
+        env:
+          PREPROD_HOST: ${{ secrets.PREPROD_HOST }}
+          PREPROD_SITE: ${{ secrets.PREPROD_SITE }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$ZAI_API_KEY" ]] || { echo "::error::Z.AI key is not configured in the preprod environment"; exit 1; }
+          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PREPROD_HOST" python3 -c '
+          import json, os, shutil, stat, subprocess, sys, tempfile
+          from pathlib import Path
+          site = sys.argv[1]
+          mount = subprocess.check_output(["docker", "volume", "inspect", "tutor_sites", "--format", "{{.Mountpoint}}"], text=True).strip()
+          path = Path(mount) / site / "site_config.json"
+          secret = sys.stdin.read()
+          if not secret:
+              raise SystemExit("Z.AI key was empty")
+          config = json.loads(path.read_text())
+          config["zai_api_key"] = secret
+          fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=".site_config.")
+          try:
+              with os.fdopen(fd, "w") as temp_file:
+                  json.dump(config, temp_file, ensure_ascii=False, indent=1)
+                  temp_file.write("\n")
+              os.chmod(temp_name, stat.S_IMODE(path.stat().st_mode))
+              shutil.chown(temp_name, user=1000, group=1000)
+              os.replace(temp_name, path)
+          finally:
+              if os.path.exists(temp_name):
+                  os.unlink(temp_name)
+          ' "$PREPROD_SITE"
+
       - name: Result
         env:
           CLONE_STATUS: ${{ steps.clone.outputs.clone_status }}
