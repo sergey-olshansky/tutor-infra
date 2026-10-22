@@ -265,7 +265,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$ZAI_API_KEY" ]] || { echo "::error::Z.AI key is not configured in the preprod environment"; exit 1; }
-          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PREPROD_HOST" python3 -c '
+          REMOTE_SCRIPT=$(base64 -w0 <<'PY'
           import json, os, shutil, stat, subprocess, sys, tempfile
           from pathlib import Path
           site = sys.argv[1]
@@ -287,7 +287,10 @@ jobs:
           finally:
               if os.path.exists(temp_name):
                   os.unlink(temp_name)
-          ' "$PREPROD_SITE"
+          PY
+          )
+          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PREPROD_HOST" \
+            "python3 -c 'import base64; exec(base64.b64decode(\"$REMOTE_SCRIPT\"))' '$PREPROD_SITE'"
 
       - name: Result
         env:
