@@ -234,11 +234,20 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$ZAI_API_KEY" ]] || { echo "::error::Z.AI key is not configured in the production environment"; exit 1; }
-          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PROD_HOST" python3 -c '
-          import json, os, shutil, stat, subprocess, sys, tempfile
+          [[ "$PROD_SITE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::Invalid production site name"; exit 1; }
+          REMOTE_SCRIPT=$(base64 -w0 <<'PY'
+          import json, os, stat, subprocess, sys, tempfile
           from pathlib import Path
           site = sys.argv[1]
-          mount = subprocess.check_output(["docker", "volume", "inspect", "tutor_sites", "--format", "{{.Mountpoint}}"], text=True).strip()
+          compose_dir = Path("/srv/tutor/frappe_docker")
+          compose = ["docker", "compose", "--project-directory", str(compose_dir)]
+          for filename in ("compose.yaml", "overrides/compose.mariadb.yaml", "overrides/compose.redis.yaml", "overrides/compose.https.yaml"):
+              compose.extend(["-f", str(compose_dir / filename)])
+          container = subprocess.check_output(compose + ["ps", "-q", "backend"], text=True).strip()
+          if not container:
+              raise SystemExit("Production backend was not found")
+          mounts = json.loads(subprocess.check_output(["docker", "inspect", container], text=True))[0]["Mounts"]
+          mount = next(item["Source"] for item in mounts if item["Destination"] == "/home/frappe/frappe-bench/sites")
           path = Path(mount) / site / "site_config.json"
           secret = sys.stdin.read()
           if not secret:
@@ -250,13 +259,17 @@ jobs:
               with os.fdopen(fd, "w") as temp_file:
                   json.dump(config, temp_file, ensure_ascii=False, indent=1)
                   temp_file.write("\n")
-              os.chmod(temp_name, stat.S_IMODE(path.stat().st_mode))
-              shutil.chown(temp_name, user=1000, group=1000)
+              metadata = path.stat()
+              os.chmod(temp_name, stat.S_IMODE(metadata.st_mode))
+              os.chown(temp_name, metadata.st_uid, metadata.st_gid)
               os.replace(temp_name, path)
           finally:
               if os.path.exists(temp_name):
                   os.unlink(temp_name)
-          ' "$PROD_SITE"
+          PY
+          )
+          printf '%s' "$ZAI_API_KEY" | ssh -T root@"$PROD_HOST" \
+            "python3 -c 'import base64; exec(base64.b64decode(\"$REMOTE_SCRIPT\"))' '$PROD_SITE'"
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 ${{ secrets.PROD_URL }} || true)
             [[ "$code" == "200" ]] && break
