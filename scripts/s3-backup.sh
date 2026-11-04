@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 
-# S3-помощник для бекапов LMS production; выполняется НА раннере GitHub Actions.
+# S3-помощник для бекапов LMS production. Запускается на раннере GitHub Actions
+# ИЛИ на сервере (production/preprod) через `ssh 'set -a; . /run/tutor-s3.env;
+# set +a; bash -s -- <команда>' < scripts/s3-backup.sh` — секреты передаются
+# временным env-файлом на tmpfs и нигде не хранятся.
 # Использует rclone (Go TLS): AWS CLI v2 со своим стеком s2n не проходит
-# TLS-соединение с Selectel (проверено диагностикой 2026-11-04: curl/openssl/
-# rclone с раннера работают, aws cli v2 — нет). Работает с любым S3-совместимым
-# провайдером через S3_ENDPOINT_URL.
+# TLS-соединение с Selectel, а канал раннер->Selectel не тянет 400 МБ
+# (проверено 2026-11-04: curl/openssl/rclone с раннера работают на мелких
+# запросах; большие передачи падают). Поэтому загрузка/скачивание выполняются
+# на RU-серверах. Работает с любым S3-совместимым провайдером через
+# S3_ENDPOINT_URL.
 #
 # Каноническое имя бекапа (единая строгая проверка в upload/latest/retention/
 # download, посторонние объекты не выбираются и не удаляются):
@@ -53,8 +58,9 @@ else
 	export RCLONE_CONFIG_BK_PROVIDER=AWS
 fi
 export RCLONE_CONFIG_BK_REGION="${S3_REGION:-us-east-1}"
-export RCLONE_CONFIG_BK_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
-export RCLONE_CONFIG_BK_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+# Креды приходят либо как AWS_* (раннер), либо как S3_* (env-файл на сервере).
+export RCLONE_CONFIG_BK_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-${S3_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID or S3_ACCESS_KEY_ID is required}}"
+export RCLONE_CONFIG_BK_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-${S3_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY or S3_SECRET_ACCESS_KEY is required}}"
 export RCLONE_CONFIG_BK_NO_CHECK_BUCKET=true
 
 is_canonical_name() {
