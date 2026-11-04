@@ -1,0 +1,67 @@
+name: S3 Network Diagnostic
+run-name: "s3-diag-${{ github.run_id }}"
+
+# Разовая диагностика связи раннер <-> Selectel (TLS/стеки). Запуск только
+# вручную; никаких бекапов и изменений не выполняет. Удалить после стабилизации
+# бекапов или оставить для сетевых проверок (см. BACKUP.md).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Endpoint reachability (curl, non-AWS stack)
+        run: |
+          set -uo pipefail
+          echo "== curl HEAD ${{ vars.S3_ENDPOINT_URL }}"
+          curl -sS -o /dev/null -w 'http_code=%{http_code} tls=%{ssl_verify_result} time=%{time_total}s\n' \
+            --max-time 20 "${{ vars.S3_ENDPOINT_URL }}" || echo "curl failed rc=$?"
+          echo "== openssl handshake"
+          host=$(printf '%s\n' "${{ vars.S3_ENDPOINT_URL }}" | sed 's|https://||')
+          echo | timeout 15 openssl s_client -connect "$host:443" -servername "$host" 2>/dev/null \
+            | grep -E "Protocol|Cipher|Verify return" | head -4 || echo "openssl handshake failed"
+
+      - name: aws cli v2 (runner default, s2n TLS)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.S3_REGION }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+        run: |
+          set -uo pipefail
+          aws --version
+          echo "== s3 ls (маленький запрос, только handshake+подпись)"
+          if aws s3 --endpoint-url "$S3_ENDPOINT_URL" ls "s3://$S3_BUCKET/lms-production/" >/tmp/ls.out 2>/tmp/ls.err; then
+            echo "LS_OK"; head -3 /tmp/ls.out
+          else
+            echo "LS_FAILED"; tail -3 /tmp/ls.err
+          fi
+
+      - name: rclone (Go TLS)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+        run: |
+          set -uo pipefail
+          curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip
+          unzip -q -j -o /tmp/rclone.zip -d /usr/local/bin
+          rclone version | head -1
+          export RCLONE_CONFIG_SEL_TYPE=s3 RCLONE_CONFIG_SEL_PROVIDER=Other \
+            RCLONE_CONFIG_SEL_ENDPOINT="$S3_ENDPOINT_URL" RCLONE_CONFIG_SEL_REGION=${{ vars.S3_REGION }} \
+            RCLONE_CONFIG_SEL_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+            RCLONE_CONFIG_SEL_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+            RCLONE_CONFIG_SEL_NO_CHECK_BUCKET=true
+          if rclone lsf "SEL:$S3_BUCKET/lms-production/" >/tmp/rc.out 2>/tmp/rc.err; then
+            echo "RCLONE_LSF_OK"; head -3 /tmp/rc.out
+          else
+            echo "RCLONE_FAILED"; tail -3 /tmp/rc.err
+          fi
