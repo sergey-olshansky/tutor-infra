@@ -85,10 +85,11 @@ fetch_keys() {
 	printf '%s\n' "$listing"
 }
 
-# Размер объекта в S3 (проверка после загрузки). Число байт — третье поле
-# в обоих форматах вывода: "Total bytes: N" (старые rclone) и "Total size: N B".
+# Размер объекта в S3 (проверка после загрузки). --json даёт стабильное
+# {"count":1,"bytes":N}; человекочитаемый вывод "Total size: 387.159 MiB (N Byte)"
+# парсить по полям нельзя (для малых файлов число в другом поле).
 remote_size() {
-	rclone size "BK:$remote_root/$1" | awk '/^Total (bytes|size):/ {print $3}'
+	rclone size --json "BK:$remote_root/$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["bytes"])'
 }
 
 retention() {
