@@ -117,7 +117,11 @@ jobs:
           echo "PREPROD OK"
           REMOTE
 
+      - uses: actions/checkout@v4
+        if: ${{ inputs.clone_prod }}
+
       - name: Fresh production backup
+        id: prodbackup
         if: ${{ inputs.clone_prod }}
         run: |
           set -euo pipefail
@@ -127,54 +131,76 @@ jobs:
           install -m 600 /dev/null "$RUNNER_TEMP/prod_key"
           echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
+          PROD_SSH=(ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" root@${{ secrets.PROD_HOST }})
           echo "== Backing up production..."
-          ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
-              root@${{ secrets.PROD_HOST }} bash -s <<'BACKUP'
-          set -Eeuo pipefail
-          cd /srv/tutor/frappe_docker
-          COMPOSE="docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.https.yaml"
-          SITE="learn.vladastay.ru"
-          echo "  Running bench backup..."
-          $COMPOSE exec -T backend bench --site "$SITE" backup --with-files </dev/null 2>&1 | tail -3
-          BACKUPS=/home/frappe/frappe-bench/sites/$SITE/private/backups
-          CID=$($COMPOSE ps -q backend)
-          TS=$(date -u +%Y%m%dT%H%M%SZ)
-          echo "  Packing..."
-          rm -rf /tmp/pack && mkdir -p /tmp/pack
-          for F in $(docker exec "$CID" ls -t "$BACKUPS" | head -4); do
-            docker cp "$CID:$BACKUPS/$F" /tmp/pack/ 2>/dev/null
-          done
-          tar czf /tmp/lms-backup-fresh-$TS.tgz -C /tmp/pack .
-          rm -rf /tmp/pack
-          echo "  Sending to control..."
-          ssh -i /root/.ssh/backup-to-control -o BatchMode=yes backuprecv@${{ secrets.CONTROL_HOST }} "put lms-backup-fresh-$TS.tgz" < /tmp/lms-backup-fresh-$TS.tgz
-          rm /tmp/lms-backup-fresh-$TS.tgz
-          echo "  Backup sent: lms-backup-fresh-$TS.tgz"
-          BACKUP
+          # Общий скрипт (label=fresh): bench backup -> tgz (+SHA256SUMS) -> control.
+          OUT=$("${PROD_SSH[@]}" bash -s -- "${{ secrets.CONTROL_HOST }}" fresh < scripts/backup-production.sh)
+          printf '%s\n' "$OUT"
+          FILE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_FILE=//p')
+          SHA=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SHA256=//p')
+          [[ -n "$FILE" && -n "$SHA" ]] || { echo "::error::Нет маркеров BACKUP_* в выводе"; exit 1; }
+          # Имя фиксируем в outputs ДО передачи: cleanup-шаг обязан сработать
+          # и при сбое забора/проверки архива с прода.
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          "${PROD_SSH[@]}" "cat /tmp/$FILE" > "$RUNNER_TEMP/$FILE"
+          (cd "$RUNNER_TEMP" && printf '%s  %s\n' "$SHA" "$FILE" | sha256sum -c -)
+
+      - name: Upload fresh backup to S3
+        if: ${{ inputs.clone_prod }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ vars.S3_REGION }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          S3_RETAIN_DAYS: ${{ vars.S3_RETAIN_DAYS }}
+        run: |
+          set -euo pipefail
+          FILE="${{ steps.prodbackup.outputs.file }}"
+          if [[ -z "$S3_BUCKET" ]]; then
+            echo "::warning::S3 не настроен (vars.S3_BUCKET пуст) — бекап сохранён на control; клон будет использовать копию с раннера. Настройка: BACKUP.md."
+            exit 0
+          fi
+          scripts/s3-backup.sh upload "$RUNNER_TEMP/$FILE"
+          echo "s3_uploaded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup backup staging on production
+        if: ${{ always() && steps.prodbackup.outputs.file != '' }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
+          ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
+            root@${{ secrets.PROD_HOST }} "rm -f /tmp/${{ steps.prodbackup.outputs.file }}"
 
       - name: Clone production data (optional)
         id: clone
         if: ${{ inputs.clone_prod }}
         env:
-          CONTROL_HOST: 135.106.196.249
-          CONTROL_HOST_FINGERPRINT: SHA256:H/PR8KAwhJ/VHNV/DiB4i8SBNI3spMLr4/I5nuZpkD8
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ vars.S3_REGION }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
         run: |
           set -Eeuo pipefail
-          install -m 600 /dev/null "$RUNNER_TEMP/control_key"
-          echo "${{ secrets.CONTROL_SSH_KEY }}" > "$RUNNER_TEMP/control_key"
-          ssh-keyscan -t ed25519 "$CONTROL_HOST" > "$RUNNER_TEMP/control_known_hosts" 2>/dev/null
-          ACTUAL=$(ssh-keygen -lf "$RUNNER_TEMP/control_known_hosts" -E sha256 | awk 'NR==1{print $2}')
-          [ "$ACTUAL" = "$CONTROL_HOST_FINGERPRINT" ] || { echo "::error::Не совпал host key control"; exit 1; }
-
-          SSH_CONTROL=(ssh -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
-          SCP_CONTROL=(scp -i "$RUNNER_TEMP/control_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/control_known_hosts")
-
-          echo "Fetching backup from control..."
-          BACKUP_FILE=$("${SSH_CONTROL[@]}" root@"$CONTROL_HOST" 'ls -t /var/backups/production/lms-backup-*.tgz | head -1')
-          echo "Found: $(basename "$BACKUP_FILE")"
-          "${SCP_CONTROL[@]}" "root@$CONTROL_HOST:$BACKUP_FILE" /tmp/prod-backup.tgz
-          scp -o BatchMode=yes /tmp/prod-backup.tgz root@${{ secrets.PREPROD_HOST }}:/tmp/
-          rm /tmp/prod-backup.tgz
+          FILE="${{ steps.prodbackup.outputs.file }}"
+          SRC="$RUNNER_TEMP/$FILE"
+          if [[ -n "$S3_BUCKET" ]]; then
+            # Бекап на препрод идёт ИЗ S3 (заодно проверяем восстанавливаемость
+            # S3-копии: download сверяет sha256 по сайдкару).
+            echo "Fetching backup from S3..."
+            SRC="$RUNNER_TEMP/s3-$FILE"
+            scripts/s3-backup.sh download "$FILE" "$SRC"
+          else
+            echo "::warning::S3 не настроен — бекап берётся с раннера (прод-копия); на control он тоже сохранён."
+          fi
+          scp -o BatchMode=yes "$SRC" root@${{ secrets.PREPROD_HOST }}:/tmp/prod-backup.tgz
+          rm -f "$RUNNER_TEMP/$FILE" "$RUNNER_TEMP/s3-$FILE" "$RUNNER_TEMP/$FILE.sha256"
           echo "Restoring on preprod..."
 
           # Restore-скрипт исполняется из ФАЙЛА на preprod, а не через stdin bash -s:
