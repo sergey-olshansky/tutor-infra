@@ -145,6 +145,10 @@ jobs:
           "${PROD_SSH[@]}" "cat /tmp/$FILE" > "$RUNNER_TEMP/$FILE"
           (cd "$RUNNER_TEMP" && printf '%s  %s\n' "$SHA" "$FILE" | sha256sum -c -)
 
+      - name: Install rclone (pinned)
+        if: ${{ inputs.clone_prod }}
+        run: scripts/install-rclone.sh
+
       - name: Upload fresh backup to S3
         if: ${{ inputs.clone_prod }}
         env:
