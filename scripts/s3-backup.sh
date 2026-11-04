@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
-# S3-помощник для бекапов LMS production; выполняется НА раннере GitHub Actions
-# (предустановлены aws cli и python3). Работает с любым S3-совместимым провайдером
-# через S3_ENDPOINT_URL.
+# S3-помощник для бекапов LMS production; выполняется НА раннере GitHub Actions.
+# Использует rclone (Go TLS): AWS CLI v2 со своим стеком s2n не проходит
+# TLS-соединение с Selectel (проверено диагностикой 2026-11-04: curl/openssl/
+# rclone с раннера работают, aws cli v2 — нет). Работает с любым S3-совместимым
+# провайдером через S3_ENDPOINT_URL.
 #
 # Каноническое имя бекапа (единая строгая проверка в upload/latest/retention/
 # download, посторонние объекты не выбираются и не удаляются):
@@ -10,8 +12,8 @@
 #
 # Команды:
 #   upload <lms-backup-*.tgz>          — загрузка + .sha256 сайдкар, проверка
-#                                        размера через head-object, затем ротация;
-#                                        печатает маркер S3_KEY=<prefix>/<имя>
+#                                        размера, затем ротация; печатает маркер
+#                                        S3_KEY=<prefix>/<имя>
 #   download <key|latest> <dest-path>  — скачивание (latest = новейший по дате
 #                                        в имени) с проверкой sha256 по сайдкару;
 #                                        <key> принимает как полный ключ из
@@ -35,28 +37,25 @@ usage() {
 }
 
 [[ $# -ge 1 ]] || usage
-command -v aws >/dev/null || { printf 'aws cli is missing\n' >&2; exit 1; }
-command -v python3 >/dev/null || { printf 'python3 is missing\n' >&2; exit 1; }
+command -v rclone >/dev/null || { printf 'rclone is missing (see scripts/install-rclone.sh)\n' >&2; exit 1; }
 
 : "${S3_BUCKET:?S3_BUCKET is required}"
 readonly prefix="${S3_PREFIX:-lms-production}"
 readonly retain_days="${S3_RETAIN_DAYS:-30}"
-export AWS_DEFAULT_REGION="${S3_REGION:-us-east-1}"
+readonly remote_root="$S3_BUCKET/$prefix"
 
-s3() {
-	if [[ -n "${S3_ENDPOINT_URL:-}" ]]; then
-		aws s3 --endpoint-url "$S3_ENDPOINT_URL" "$@"
-	else
-		aws s3 "$@"
-	fi
-}
-s3api() {
-	if [[ -n "${S3_ENDPOINT_URL:-}" ]]; then
-		aws s3api --endpoint-url "$S3_ENDPOINT_URL" "$@"
-	else
-		aws s3api "$@"
-	fi
-}
+# Удалённый ресурс rclone настраивается переменными окружения, без файла конфигурации.
+export RCLONE_CONFIG_BK_TYPE=s3
+if [[ -n "${S3_ENDPOINT_URL:-}" ]]; then
+	export RCLONE_CONFIG_BK_PROVIDER=Other
+	export RCLONE_CONFIG_BK_ENDPOINT="$S3_ENDPOINT_URL"
+else
+	export RCLONE_CONFIG_BK_PROVIDER=AWS
+fi
+export RCLONE_CONFIG_BK_REGION="${S3_REGION:-us-east-1}"
+export RCLONE_CONFIG_BK_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}"
+export RCLONE_CONFIG_BK_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}"
+export RCLONE_CONFIG_BK_NO_CHECK_BUCKET=true
 
 is_canonical_name() {
 	[[ "$1" =~ ^lms-backup(-[a-z]+)?-[0-9]{8}T[0-9]{6}Z\.tgz$ ]]
@@ -69,16 +68,21 @@ key_date() { printf '%s' "$1" | sed -nE 's/.*-([0-9]{8})T[0-9]{6}Z\.tgz$/\1/p'; 
 # одного дня недостаточно — внутри дня лейблы ломали бы порядок).
 key_stamp() { printf '%s' "$1" | sed -nE 's/.*-([0-9]{8}T[0-9]{6}Z)\.tgz$/\1/p'; }
 
-# Листинг префикса с явной проверкой отказа: ошибка s3 ls обязана валить
+# Листинг префикса с явной проверкой отказа: ошибка листинга обязана валить
 # вызывавшую команду, а не превращаться в молчаливое «удалено 0».
 fetch_keys() {
 	local listing
-	if ! listing=$(s3 ls "s3://$S3_BUCKET/$prefix/"); then
-		printf 'FAILED: cannot list s3://%s/%s/\n' "$S3_BUCKET" "$prefix" >&2
+	if ! listing=$(rclone lsf "BK:$remote_root/" --files-only); then
+		printf 'FAILED: cannot list BK:%s/\n' "$remote_root" >&2
 		return 1
 	fi
-	# Поле 4+ в выводе `aws s3 ls` — ключ (в наших ключах пробелов нет).
-	printf '%s\n' "$listing" | awk 'NF >= 4 {print substr($0, index($0, $4))}'
+	printf '%s\n' "$listing"
+}
+
+# Размер объекта в S3 (проверка после загрузки). Число байт — третье поле
+# в обоих форматах вывода: "Total bytes: N" (старые rclone) и "Total size: N B".
+remote_size() {
+	rclone size "BK:$remote_root/$1" | awk '/^Total (bytes|size):/ {print $3}'
 }
 
 retention() {
@@ -93,8 +97,8 @@ retention() {
 		is_canonical_name "$key" || continue
 		date=$(key_date "$key")
 		if [[ "$date" < "$cutoff" ]]; then
-			s3 rm "s3://$S3_BUCKET/$prefix/$key" >/dev/null
-			s3 rm "s3://$S3_BUCKET/$prefix/$key.sha256" >/dev/null || true
+			rclone deletefile "BK:$remote_root/$key" >/dev/null
+			rclone deletefile "BK:$remote_root/$key.sha256" >/dev/null 2>&1 || true
 			printf 'retention: removed %s\n' "$key"
 			removed=$((removed + 1))
 		fi
@@ -105,7 +109,7 @@ retention() {
 
 upload() {
 	[[ $# -eq 1 ]] || usage
-	local file="$1" base sha256 size remote_size
+	local file="$1" base sha256 size rsize
 	base=$(basename "$file")
 	[[ -f "$file" ]] || { printf 'No such file: %s\n' "$file" >&2; exit 1; }
 	# Ротация и latest опираются на дату в имени — принимаем только канонические имена.
@@ -118,17 +122,16 @@ upload() {
 	size=$(file_size "$file")
 	printf '%s  %s\n' "$sha256" "$base" > "$file.sha256"
 
-	printf 'Uploading %s (%s bytes) to s3://%s/%s/...\n' "$base" "$size" "$S3_BUCKET" "$prefix"
-	s3 cp "$file" "s3://$S3_BUCKET/$prefix/$base"
-	s3 cp "$file.sha256" "s3://$S3_BUCKET/$prefix/$base.sha256"
+	printf 'Uploading %s (%s bytes) to BK:%s/...\n' "$base" "$size" "$remote_root"
+	rclone copyto "$file" "BK:$remote_root/$base"
+	rclone copyto "$file.sha256" "BK:$remote_root/$base.sha256"
 
-	remote_size=$(s3api head-object --bucket "$S3_BUCKET" --key "$prefix/$base" \
-		--query ContentLength --output text)
-	if [[ "$remote_size" != "$size" ]]; then
-		printf 'FAILED: remote size %s != local %s\n' "$remote_size" "$size" >&2
+	rsize=$(remote_size "$base")
+	if [[ "$rsize" != "$size" ]]; then
+		printf 'FAILED: remote size %s != local %s\n' "$rsize" "$size" >&2
 		exit 1
 	fi
-	printf 'Verified size in S3: %s bytes\n' "$remote_size"
+	printf 'Verified size in S3: %s bytes\n' "$rsize"
 	retention
 	printf 'S3_KEY=%s/%s\n' "$prefix" "$base"
 }
@@ -137,28 +140,31 @@ download() {
 	[[ $# -eq 2 ]] || usage
 	local key="$1" dest="$2" sidecar_hash got_hash tmp
 	# Принимаем полный ключ из маркера S3_KEY (prefix/name) или относительное имя.
+	# Префикс без glob-символов, поэтому в шаблоне ${key#...} кавычки не нужны
+	# (вложенные кавычки внутри ${} ломают bash 3.2).
+	local with_prefix="$prefix/"
 	case "$key" in
-		"$prefix/"*) key="${key#"$prefix"/}" ;;
+		"$with_prefix"*) key="${key#$with_prefix}" ;;
 	esac
 	if [[ "$key" == "latest" ]]; then
 		local keys
 		keys=$(fetch_keys)
-		# Сортируем по дате-времени из имени: лейблы (daily/fresh) не должны
-		# влиять на порядок; посторонние имена отфильтрованы канонической
-		# проверкой. if без else: тело цикла всегда завершается 0 (set -e).
+		# Сортируем по полному времени из имени: лейблы (daily/fresh) не влияют
+		# на порядок; посторонние имена отфильтрованы канонической проверкой.
+		# if без else: тело цикла всегда завершается 0 (set -e внутри $()).
 		key=$(printf '%s\n' "$keys" | while IFS= read -r k; do
 			if is_canonical_name "$k"; then
 				printf '%s %s\n' "$(key_stamp "$k")" "$k"
 			fi
 		done | sort -r | awk 'NR==1{print $2}')
-		[[ -n "$key" ]] || { printf 'No canonical lms-backup-*.tgz found in s3://%s/%s/\n' "$S3_BUCKET" "$prefix" >&2; exit 1; }
+		[[ -n "$key" ]] || { printf 'No canonical lms-backup-*.tgz found in BK:%s/\n' "$remote_root" >&2; exit 1; }
 		printf 'Latest backup: %s\n' "$key"
 	fi
 	is_canonical_name "$key" || { printf 'Invalid key: %s\n' "$key" >&2; exit 1; }
 
-	s3 cp "s3://$S3_BUCKET/$prefix/$key" "$dest"
+	rclone copyto "BK:$remote_root/$key" "$dest"
 	tmp=$(mktemp)
-	s3 cp "s3://$S3_BUCKET/$prefix/$key.sha256" "$tmp"
+	rclone copyto "BK:$remote_root/$key.sha256" "$tmp"
 	sidecar_hash=$(awk 'NR==1{print $1}' "$tmp")
 	rm -f "$tmp"
 	got_hash=$(sha256sum "$dest" | awk '{print $1}')

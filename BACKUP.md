@@ -5,7 +5,8 @@
 | Кусок | Где | Что делает |
 | --- | --- | --- |
 | Общий прод-бекап | `scripts/backup-production.sh` (новый) | На production: `bench backup --with-files` → `lms-backup[-label]-<TS>.tgz` (+`SHA256SUMS` внутри) → отправка на control (`backuprecv@… put …`). tgz остаётся в `/tmp` на проде для забора раннером; маркеры `BACKUP_FILE/SHA256/SIZE` |
-| S3-помощник раннера | `scripts/s3-backup.sh` (новый) | На раннере GHA: `upload` (tgz + `.sha256` сайдкар, проверка размера через `head-object`, ротация), `download <key|latest>` (проверка sha256), `retention`. Любой S3-совместимый провайдер через `S3_ENDPOINT_URL` |
+| S3-помощник раннера | `scripts/s3-backup.sh` (новый) | На раннере GHA (rclone): `upload` (tgz + `.sha256` сайдкар, проверка размера, ротация), `download <key|latest>` (проверка sha256), `retention`. Любой S3-совместимый провайдер через `S3_ENDPOINT_URL` |
+| Установка rclone на раннер | `scripts/install-rclone.sh` (новый) | Скачивает зафиксированную версию rclone v1.75.2 (linux-amd64) с проверкой sha256. AWS CLI v2 не используется: его стек TLS (s2n) не соединяется с Selectel — см. `s3-net-diagnostic.yml` |
 | Релиз | `.github/workflows/deploy-production.yml` | Перед выкладкой: прод-бекап (общий скрипт) → копия на control → забор tgz на раннер → upload в S3 → очистка `/tmp` на проде |
 | Клон прода на препрод | `.github/workflows/deploy-preprod.yml` (`clone_prod`) | Fresh-бекап прода (label `fresh`) → control + S3 → **скачивание из S3 на раннер** (проверка восстанавливаемости) → препрод. Без настроенного S3 — копия с раннера |
 | Ежедневный бекап | `.github/workflows/backup-daily.yml` | 03:00 МСК ежедневно (label `daily`): тот же поток → control + S3 + ротация + журнал `releases/backups.log` |
@@ -64,12 +65,15 @@ gh variable set S3_ENDPOINT_URL -R sergey-olshansky/tutor-infra -b "<https://end
 ## Восстановление из S3 (runbook)
 
 ```bash
-export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=<регион>
-B=<бакет>; E=(--endpoint-url <endpoint>)   # AWS: E=()
-aws "${E[@]}" s3 ls "s3://$B/lms-production/" | sort -k4        # выбрать дату
-aws "${E[@]}" s3 cp "s3://$B/lms-production/lms-backup-<TS>.tgz.sha256" -   # эталон суммы
-aws "${E[@]}" s3 cp "s3://$B/lms-production/lms-backup-<TS>.tgz" /tmp/prod-backup.tgz
-sha256sum /tmp/prod-backup.tgz                                     # сверить вручную
+# rclone (тот же клиент, что в пайплайне); creds и endpoint — как в vars/secrets
+export RCLONE_CONFIG_BK_TYPE=s3 RCLONE_CONFIG_BK_PROVIDER=Other \
+  RCLONE_CONFIG_BK_ENDPOINT=https://s3.ru-7.storage.selcloud.ru \
+  RCLONE_CONFIG_BK_REGION=ru-7 RCLONE_CONFIG_BK_NO_CHECK_BUCKET=true \
+  RCLONE_CONFIG_BK_ACCESS_KEY_ID=<key> RCLONE_CONFIG_BK_SECRET_ACCESS_KEY=<secret>
+rclone lsf BK:eduproject/lms-production/            # выбрать дату
+rclone cat BK:eduproject/lms-production/lms-backup-<TS>.tgz.sha256   # эталон суммы
+rclone copyto BK:eduproject/lms-production/lms-backup-<TS>.tgz /tmp/prod-backup.tgz
+shasum -a 256 /tmp/prod-backup.tgz                   # сверить вручную
 # далее — как в restore-шаге deploy-preprod.yml: tar, zcat | mariadb, распаковка tars файлов
 # полная БД сайта — только `bench --site … restore` / как в restore-prod.sh
 ```
@@ -106,5 +110,10 @@ sha256sum /tmp/prod-backup.tgz                                     # свери�
   `/run/lock/lms-backup-production.lock` (flock, ожидание до 10 минут) и использует
   уникальный staging-каталог на запуск (`/tmp/lms-backup-staging.*`); bench backup
   и выбор свежего сета тоже проходят под локом.
+- **Почему rclone, а не AWS CLI:** диагностикой 2026-11-04 (workflow
+  `s3-net-diagnostic.yml`, запуск вручную) установлено: с раннера GitHub
+  curl/openssl/rclone к Selectel работают, а AWS CLI v2 (стек TLS s2n) падает
+  с `AWS_IO_TLS_ERROR_NEGOTIATION_FAILURE` даже на `s3 ls`. Поэтому S3-шаги
+  используют rclone; диагностический workflow оставлен для сетевых проверок.
 - Для серверного шифрования/версионирования бакета настройте их на стороне провайдера
   (например, SSE-S3, versioning + lifecycle) — скрипт не мешает.

@@ -145,6 +145,9 @@ jobs:
           (cd "$RUNNER_TEMP" && printf '%s  %s\n' "$SHA" "$FILE" | sha256sum -c -)
           echo "Backup complete: $FILE ($SIZE bytes, sha256 $SHA)"
 
+      - name: Install rclone (pinned)
+        run: scripts/install-rclone.sh
+
       - name: Upload backup to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
