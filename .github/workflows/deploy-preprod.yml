@@ -123,6 +123,14 @@ jobs:
       - name: Fresh production backup
         id: prodbackup
         if: ${{ inputs.clone_prod }}
+        env:
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ vars.S3_REGION }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+          S3_RETAIN_DAYS: ${{ vars.S3_RETAIN_DAYS }}
         run: |
           set -euo pipefail
           # Прод-ключ и known_hosts — отдельные файлы (не ~/.ssh/id_ed25519,
@@ -132,6 +140,16 @@ jobs:
           echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
           PROD_SSH=(ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" root@${{ secrets.PROD_HOST }})
+          if [[ -n "$S3_BUCKET" ]]; then
+            # Загрузка в S3 выполняется НА проде (RU->RU); секреты — во временный
+            # env-файл на tmpfs /run, только через stdin.
+            printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_BUCKET=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=%s\nS3_PREFIX=%s\nS3_RETAIN_DAYS=%s\n' \
+              "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" \
+              "$S3_BUCKET" "$S3_ENDPOINT_URL" "$S3_REGION" "$S3_PREFIX" "$S3_RETAIN_DAYS" \
+              | "${PROD_SSH[@]}" 'umask 077 && cat > /run/tutor-s3.env'
+          else
+            echo "::warning::S3 не настроен (vars.S3_BUCKET пуст) — бекап только на control. Настройка: BACKUP.md."
+          fi
           echo "== Backing up production..."
           # Общий скрипт (label=fresh): bench backup -> tgz (+SHA256SUMS) -> control.
           OUT=$("${PROD_SSH[@]}" bash -s -- "${{ secrets.CONTROL_HOST }}" fresh < scripts/backup-production.sh)
@@ -139,35 +157,21 @@ jobs:
           FILE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_FILE=//p')
           SHA=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SHA256=//p')
           [[ -n "$FILE" && -n "$SHA" ]] || { echo "::error::Нет маркеров BACKUP_* в выводе"; exit 1; }
-          # Имя фиксируем в outputs ДО передачи: cleanup-шаг обязан сработать
-          # и при сбое забора/проверки архива с прода.
+          # Имя фиксируем в outputs сразу: cleanup-шаг обязан сработать при любом сбое ниже.
           echo "file=$FILE" >> "$GITHUB_OUTPUT"
-          "${PROD_SSH[@]}" "cat /tmp/$FILE" > "$RUNNER_TEMP/$FILE"
-          (cd "$RUNNER_TEMP" && printf '%s  %s\n' "$SHA" "$FILE" | sha256sum -c -)
 
-      - name: Install rclone (pinned)
-        if: ${{ inputs.clone_prod }}
-        run: scripts/install-rclone.sh
-
-      - name: Upload fresh backup to S3
-        if: ${{ inputs.clone_prod }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
-          S3_REGION: ${{ vars.S3_REGION }}
-          S3_PREFIX: ${{ vars.S3_PREFIX }}
-          S3_RETAIN_DAYS: ${{ vars.S3_RETAIN_DAYS }}
+      - name: Upload fresh backup to S3 (from production)
+        if: ${{ inputs.clone_prod && vars.S3_BUCKET != '' }}
         run: |
           set -euo pipefail
-          FILE="${{ steps.prodbackup.outputs.file }}"
-          if [[ -z "$S3_BUCKET" ]]; then
-            echo "::warning::S3 не настроен (vars.S3_BUCKET пуст) — бекап сохранён на control; клон будет использовать копию с раннера. Настройка: BACKUP.md."
-            exit 0
-          fi
-          scripts/s3-backup.sh upload "$RUNNER_TEMP/$FILE"
-          echo "s3_uploaded=true" >> "$GITHUB_OUTPUT"
+          install -m 600 /dev/null "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
+          ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
+            root@${{ secrets.PROD_HOST }} \
+            'set -a; . /run/tutor-s3.env; set +a; bash -s -- upload /tmp/${{ steps.prodbackup.outputs.file }}' \
+            < scripts/s3-backup.sh
 
       - name: Cleanup backup staging on production
         if: ${{ always() && steps.prodbackup.outputs.file != '' }}
@@ -178,14 +182,15 @@ jobs:
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
           ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes \
             -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
-            root@${{ secrets.PROD_HOST }} "rm -f /tmp/${{ steps.prodbackup.outputs.file }}"
+            root@${{ secrets.PROD_HOST }} \
+            "rm -f /run/tutor-s3.env /tmp/${{ steps.prodbackup.outputs.file }}"
 
       - name: Clone production data (optional)
         id: clone
         if: ${{ inputs.clone_prod }}
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
           S3_REGION: ${{ vars.S3_REGION }}
@@ -193,18 +198,31 @@ jobs:
         run: |
           set -Eeuo pipefail
           FILE="${{ steps.prodbackup.outputs.file }}"
-          SRC="$RUNNER_TEMP/$FILE"
+          PREPROD=root@${{ secrets.PREPROD_HOST }}
           if [[ -n "$S3_BUCKET" ]]; then
-            # Бекап на препрод идёт ИЗ S3 (заодно проверяем восстанавливаемость
-            # S3-копии: download сверяет sha256 по сайдкару).
-            echo "Fetching backup from S3..."
-            SRC="$RUNNER_TEMP/s3-$FILE"
-            scripts/s3-backup.sh download "$FILE" "$SRC"
+            # Бекап на препрод скачивается ИЗ S3 самим препродом (RU->RU); заодно
+            # проверяем восстанавливаемость S3-копии: download сверяет sha256 по
+            # сайдкару. Секреты — во временный env-файл на tmpfs /run препрода.
+            echo "Fetching backup from S3 (on preprod)..."
+            printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_BUCKET=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=%s\nS3_PREFIX=%s\n' \
+              "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" \
+              "$S3_BUCKET" "$S3_ENDPOINT_URL" "$S3_REGION" "$S3_PREFIX" \
+              | ssh -o BatchMode=yes "$PREPROD" 'umask 077 && cat > /run/tutor-s3.env'
+            ssh -o BatchMode=yes "$PREPROD" \
+              'set -a; . /run/tutor-s3.env; set +a; bash -s -- download '"$FILE"' /tmp/prod-backup.tgz' \
+              < scripts/s3-backup.sh
+            ssh -o BatchMode=yes "$PREPROD" 'rm -f /run/tutor-s3.env'
           else
-            echo "::warning::S3 не настроен — бекап берётся с раннера (прод-копия); на control он тоже сохранён."
+            echo "::warning::S3 не настроен — бекап забирается на раннер с прода; на control он тоже сохранён."
+            install -m 600 /dev/null "$RUNNER_TEMP/prod_key"
+            echo "${{ secrets.PROD_DEPLOY_KEY }}" > "$RUNNER_TEMP/prod_key"
+            echo "${{ secrets.PROD_KNOWN_HOSTS }}" > "$RUNNER_TEMP/prod_known_hosts"
+            ssh -i "$RUNNER_TEMP/prod_key" -o BatchMode=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/prod_known_hosts" \
+              root@${{ secrets.PROD_HOST }} "cat /tmp/$FILE" > "$RUNNER_TEMP/$FILE"
+            scp -o BatchMode=yes "$RUNNER_TEMP/$FILE" "$PREPROD":/tmp/prod-backup.tgz
+            rm -f "$RUNNER_TEMP/$FILE"
           fi
-          scp -o BatchMode=yes "$SRC" root@${{ secrets.PREPROD_HOST }}:/tmp/prod-backup.tgz
-          rm -f "$RUNNER_TEMP/$FILE" "$RUNNER_TEMP/s3-$FILE" "$RUNNER_TEMP/$FILE.sha256"
           echo "Restoring on preprod..."
 
           # Restore-скрипт исполняется из ФАЙЛА на preprod, а не через stdin bash -s:

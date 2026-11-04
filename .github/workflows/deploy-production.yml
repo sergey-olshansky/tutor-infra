@@ -122,36 +122,9 @@ jobs:
 
       - name: Backup production
         id: backup
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          install -m 600 /dev/null ~/.ssh/id_ed25519
-          echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
-          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          echo "== Backing up production..."
-          # Общий скрипт: bench backup -> tgz (+SHA256SUMS) -> control.
-          # tgz остаётся в /tmp на проде, забираем его на раннер для S3.
-          OUT=$(ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} bash -s -- \
-            "${{ secrets.CONTROL_HOST }}" < scripts/backup-production.sh)
-          printf '%s\n' "$OUT"
-          FILE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_FILE=//p')
-          SHA=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SHA256=//p')
-          SIZE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SIZE=//p')
-          [[ -n "$FILE" && -n "$SHA" && -n "$SIZE" ]] || { echo "::error::Нет маркеров BACKUP_* в выводе"; exit 1; }
-          # Имя фиксируем в outputs ДО передачи: cleanup-шаг обязан сработать
-          # и при сбое забора/проверки архива с прода.
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
-          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} "cat /tmp/$FILE" > "$RUNNER_TEMP/$FILE"
-          (cd "$RUNNER_TEMP" && printf '%s  %s\n' "$SHA" "$FILE" | sha256sum -c -)
-          echo "Backup complete: $FILE ($SIZE bytes, sha256 $SHA)"
-
-      - name: Install rclone (pinned)
-        run: scripts/install-rclone.sh
-
-      - name: Upload backup to S3
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_BUCKET: ${{ vars.S3_BUCKET }}
           S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
           S3_REGION: ${{ vars.S3_REGION }}
@@ -159,13 +132,47 @@ jobs:
           S3_RETAIN_DAYS: ${{ vars.S3_RETAIN_DAYS }}
         run: |
           set -euo pipefail
-          FILE="${{ steps.backup.outputs.file }}"
-          if [[ -z "$S3_BUCKET" ]]; then
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          PROD=root@${{ secrets.PROD_HOST }}
+          # Загрузка в S3 выполняется НА проде (RU->RU): канал раннер->Selectel
+          # не тянет 400 МБ (run 41870610250, 36 минут и обрыв). Секреты — во
+          # временный env-файл на tmpfs /run, только через stdin.
+          if [[ -n "$S3_BUCKET" ]]; then
+            printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_BUCKET=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=%s\nS3_PREFIX=%s\nS3_RETAIN_DAYS=%s\n' \
+              "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" \
+              "$S3_BUCKET" "$S3_ENDPOINT_URL" "$S3_REGION" "$S3_PREFIX" "$S3_RETAIN_DAYS" \
+              | ssh -o BatchMode=yes "$PROD" 'umask 077 && cat > /run/tutor-s3.env'
+          else
             echo "::warning::S3 не настроен (vars.S3_BUCKET пуст) — бекап сохранён только на control. Настройка: BACKUP.md."
-            exit 0
           fi
-          scripts/s3-backup.sh upload "$RUNNER_TEMP/$FILE"
-          rm -f "$RUNNER_TEMP/$FILE" "$RUNNER_TEMP/$FILE.sha256"
+          echo "== Backing up production..."
+          # Общий скрипт: bench backup -> tgz (+SHA256SUMS) -> control.
+          OUT=$(ssh -o BatchMode=yes "$PROD" bash -s -- \
+            "${{ secrets.CONTROL_HOST }}" < scripts/backup-production.sh)
+          printf '%s\n' "$OUT"
+          FILE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_FILE=//p')
+          SHA=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SHA256=//p')
+          SIZE=$(printf '%s\n' "$OUT" | sed -n 's/^BACKUP_SIZE=//p')
+          [[ -n "$FILE" && -n "$SHA" && -n "$SIZE" ]] || { echo "::error::Нет маркеров BACKUP_* в выводе"; exit 1; }
+          # Имя фиксируем в outputs сразу: cleanup-шаг обязан сработать при любом сбое ниже.
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "Backup complete: $FILE ($SIZE bytes, sha256 $SHA)"
+
+      - name: Upload backup to S3 (from production)
+        if: ${{ vars.S3_BUCKET != '' }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} \
+            'set -a; . /run/tutor-s3.env; set +a; bash -s -- upload /tmp/${{ steps.backup.outputs.file }}' \
+            < scripts/s3-backup.sh
 
       - name: Cleanup backup staging on production
         if: ${{ always() && steps.backup.outputs.file != '' }}
@@ -174,7 +181,8 @@ jobs:
           install -m 600 /dev/null ~/.ssh/id_ed25519
           echo "${{ secrets.PROD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} "rm -f /tmp/${{ steps.backup.outputs.file }}"
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} \
+            "rm -f /run/tutor-s3.env /tmp/${{ steps.backup.outputs.file }}"
 
       - name: SSH к production
         run: |

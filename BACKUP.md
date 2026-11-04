@@ -5,10 +5,10 @@
 | Кусок | Где | Что делает |
 | --- | --- | --- |
 | Общий прод-бекап | `scripts/backup-production.sh` (новый) | На production: `bench backup --with-files` → `lms-backup[-label]-<TS>.tgz` (+`SHA256SUMS` внутри) → отправка на control (`backuprecv@… put …`). tgz остаётся в `/tmp` на проде для забора раннером; маркеры `BACKUP_FILE/SHA256/SIZE` |
-| S3-помощник раннера | `scripts/s3-backup.sh` (новый) | На раннере GHA (rclone): `upload` (tgz + `.sha256` сайдкар, проверка размера, ротация), `download <key|latest>` (проверка sha256), `retention`. Любой S3-совместимый провайдер через `S3_ENDPOINT_URL` |
-| Установка rclone на раннер | `scripts/install-rclone.sh` (новый) | Скачивает зафиксированную версию rclone v1.75.2 (linux-amd64) с проверкой sha256. AWS CLI v2 не используется: его стек TLS (s2n) не соединяется с Selectel — см. `s3-net-diagnostic.yml` |
-| Релиз | `.github/workflows/deploy-production.yml` | Перед выкладкой: прод-бекап (общий скрипт) → копия на control → забор tgz на раннер → upload в S3 → очистка `/tmp` на проде |
-| Клон прода на препрод | `.github/workflows/deploy-preprod.yml` (`clone_prod`) | Fresh-бекап прода (label `fresh`) → control + S3 → **скачивание из S3 на раннер** (проверка восстанавливаемости) → препрод. Без настроенного S3 — копия с раннера |
+| S3-помощник | `scripts/s3-backup.sh` (новый) | Запускается на production/preprod через ssh (rclone): `upload` (tgz + `.sha256` сайдкар, проверка размера, ротация), `download <key|latest>` (проверка sha256), `retention`. Секреты — временный env-файл `/run/tutor-s3.env` (tmpfs, 600, удаляется cleanup-шагом). Любой S3-провайдер через `S3_ENDPOINT_URL` |
+| rclone на серверах | `scripts/install-rclone.sh` (новый) | rclone v1.75.2 (linux-amd64, sha256-проверка) установлен на production и preprod 2026-11-04. AWS CLI v2 не используется: его стек TLS (s2n) не соединяется с Selectel — см. `s3-net-diagnostic.yml` |
+| Релиз | `.github/workflows/deploy-production.yml` | Перед выкладкой: прод-бекап (общий скрипт) → control → **upload в S3 с прода (RU→RU)** → очистка `/run/tutor-s3.env` и `/tmp` на проде |
+| Клон прода на препрод | `.github/workflows/deploy-preprod.yml` (`clone_prod`) | Fresh-бекап прода (label `fresh`) → control + S3 с прода → **препрод сам скачивает из S3** (проверка восстанавливаемости по sha256-сайдкару) → restore. Без настроенного S3 — старый путь через раннер |
 | Ежедневный бекап | `.github/workflows/backup-daily.yml` | 03:00 МСК ежедневно (label `daily`): тот же поток → control + S3 + ротация + журнал `releases/backups.log` |
 | Приёмник на control | `tutor-control:/usr/local/bin/recv-backup.sh` | Forced-command SSH: принимает ровно `put lms-backup-*.tgz`, пишет в `/var/backups/production` (владелец `backuprecv`) |
 | Ежедневный бекап control | `tutor-control:/etc/cron.d/vikunja-backup` + `/usr/local/bin/vikunja-backup.sh` | tar Vikunja+Caddy в `/var/backups/vikunja`, ротация 7 дней |
@@ -18,15 +18,21 @@
 ## Потоки данных
 
 ```
-release (deploy-production.yml):
+release / daily (deploy-production.yml, backup-daily.yml):
   prod: bench backup -> /tmp/lms-backup-<TS>.tgz ──put──> control /var/backups/production
-                        │ cat по ssh
-                        └──> раннер -> S3 (tgz + .sha256, проверка размера, ротация)
+                        └──(прод сам, RU→RU)──> S3 (tgz + .sha256, проверка размера, ротация)
 
 clone_prod (deploy-preprod.yml):
   prod: bench backup -> lms-backup-fresh-<TS>.tgz ──put──> control (старый путь, сохранён)
-                        └──> раннер -> S3 ──download+sha256──> раннер -> preprod restore
+                        └──> S3 ──(препрод сам скачивает, sha256-проверка)──> preprod restore
 ```
+
+Загрузку в S3 выполняют RU-серверы, а не раннер GitHub: канал раннер→Selectel
+не пропускает ~400 МБ (36 минут и обрыв, run 41870610250), а AWS CLI v2 вдобавок
+не проходит TLS к Selectel (`AWS_IO_TLS_ERROR_NEGOTIATION_FAILURE`, диагностика
+run 41869442975: curl/openssl/rclone работают, aws cli v2 — нет). Раннер только
+оркестрирует: передаёт секреты во временный `/run/tutor-s3.env` (tmpfs) и
+запускает скрипты по ssh.
 
 Старый путь «бекап локально на control» сохранён. Пока S3 не настроен, шаг загрузки
 пишет `::warning::` и не падает; клон в этом режиме берёт проверенную копию с раннера.

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
-# Устанавливает зафиксированную версию rclone на GitHub-раннер (linux-amd64).
+# Устанавливает зафиксированную версию rclone v1.75.2 (linux-amd64) — на
+# GitHub-раннер или на сервер (production/preprod; уже установлен на обоих).
 # S3-бекапы используют rclone: AWS CLI v2 (стек TLS s2n) не соединяется с
 # Selectel — см. .github/workflows/s3-net-diagnostic.yml и BACKUP.md.
+# На серверах Ubuntu без unzip: python3 -m zipfile -e r.zip /tmp/rx
 set -Eeuo pipefail
 
 readonly version='1.75.2'
