@@ -37,7 +37,9 @@ with an embedded `SHA256SUMS` and pushed to the control server
 (`scripts/s3-backup.sh`, any S3-compatible provider via `S3_ENDPOINT_URL`) with
 a `.sha256` sidecar, verifies the remote size and applies retention. The
 preprod clone downloads the backup from S3 before restoring, proving the S3
-copy is restorable. Until S3 vars are configured the workflows warn and keep
+copy is restorable. After delivery to control the shared script retains one
+complete local backup set on production; history remains on control and S3.
+Until S3 vars are configured the workflows warn and keep
 the control-only path. A daily scheduled backup runs at 03:00 Moscow time
 (`.github/workflows/backup-daily.yml`, label `daily`, journal in
 `releases/backups.log`). Full map, setup and restore runbook: `BACKUP.md`.
