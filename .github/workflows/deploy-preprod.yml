@@ -305,6 +305,37 @@ jobs:
           grep -qx 'CLONE_OK' "$RUNNER_TEMP/restore.log" \
             && echo "clone_status=CLONE_OK" >> "$GITHUB_OUTPUT" \
             || { echo "::error::CLONE_OK не подтверждён — прод-данные НЕ склонированы" >&2; echo "clone_status=NOT_CONFIRMED" >> "$GITHUB_OUTPUT"; exit 1; }
+
+      # Post-clone migrate: клон _prodclone несёт схему прод-БД (последний
+      # migrate прода может быть старее кода образа задачи — например, колонка
+      # force_private_attachments появилась в frappe develop 2026-11-03, а прод
+      # последний раз мигрировал 2026-10-31). Migrate выполняется ПОСЛЕ клона
+      # (клон заменяет БД) и fail closed: ошибка migrate валит деплой.
+      - name: Migrate cloned schema (post-clone, fail closed)
+        if: ${{ inputs.clone_prod && steps.clone.outputs.clone_status == 'CLONE_OK' }}
+        env:
+          SITE_NAME: ${{ secrets.PREPROD_SITE }}
+        run: |
+          set -Eeuo pipefail
+          ssh root@${{ secrets.PREPROD_HOST }} bash -s -- "$SITE_NAME" <<'REMOTE'
+          set -Eeuo pipefail
+          SITE="$1"
+          cd /srv/tutor/frappe_docker
+          DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
+          echo "== Post-clone migrate: schema of cloned DB -> code of task image"
+          # Docker exec must not consume the remaining bash -s script from SSH stdin.
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' migrate" </dev/null
+          echo "== Clear cache after migrate"
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' clear-cache" </dev/null
+          echo "== Health check"
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: $SITE" http://127.0.0.1:8080/api/method/ping || true)
+            [[ "$code" == "200" ]] && break
+            sleep 5
+          done
+          [[ "$code" == "200" ]] || { echo "::error::Сайт не поднялся после migrate (код $code)"; exit 1; }
+          echo "MIGRATE_OK"
+          REMOTE
       - name: Configure Z.AI key on preprod
         env:
           PREPROD_HOST: ${{ secrets.PREPROD_HOST }}
