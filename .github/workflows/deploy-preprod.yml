@@ -323,9 +323,10 @@ jobs:
           cd /srv/tutor/frappe_docker
           DC() { docker compose -f compose.yaml -f overrides/compose.mariadb.yaml -f overrides/compose.redis.yaml -f overrides/compose.noproxy.yaml -p tutor "$@"; }
           echo "== Post-clone migrate: schema of cloned DB -> code of task image"
-          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' migrate"
+          # Docker exec must not consume the remaining bash -s script from SSH stdin.
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' migrate" </dev/null
           echo "== Clear cache after migrate"
-          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' clear-cache"
+          DC exec -T backend bash -c "cd /home/frappe/frappe-bench && bench --site '$SITE' clear-cache" </dev/null
           echo "== Health check"
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: $SITE" http://127.0.0.1:8080/api/method/ping || true)
