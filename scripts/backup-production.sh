@@ -7,9 +7,9 @@
 # удаляет. Маркеры для раннера (stdout): BACKUP_FILE=, BACKUP_SHA256=, BACKUP_SIZE=.
 # Параллельные вызовы сериализуются локом /run/lock/lms-backup-production.lock.
 #
-# bench backup с --with-files всегда делает свежий дамп (force=True) и сам
-# удаляет файлы старше ~23 ч (frappe delete_temp_backups), поэтому набор бекапов
-# в контейнере не растёт.
+# bench backup с --with-files делает свежий дамп (force=True). Возрастная
+# очистка Frappe (~23 ч) не ограничивает число запусков: после отправки на
+# control сохраняем только созданный полный локальный набор.
 set -Eeuo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
@@ -71,8 +71,10 @@ cid=$(compose ps -q backend)
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 staging_dir=$(mktemp -d /tmp/lms-backup-staging.XXXXXX)
 # Свежий сет — 4 новейших файла: БД, публичные/приватные файлы, site config.
+backup_names=()
 for f in $(docker exec "$cid" ls -t "$backups_dir" | head -4); do
 	docker cp "$cid:$backups_dir/$f" "$staging_dir/" 2>/dev/null
+	backup_names+=("$f")
 done
 file_count=$(ls -1 "$staging_dir" | wc -l)
 if [[ "$file_count" -ne 4 ]]; then
@@ -90,6 +92,49 @@ backup_size=$(stat -c%s "$archive_path")
 printf '== Sending %s to control (%s)...\n' "$backup_file" "$control_host"
 ssh -i "$control_key" -o BatchMode=yes \
 	"$control_user@$control_host" "put $backup_file" < "$archive_path"
+
+# Delete older local sets only after this complete set has reached control.
+# Pass Python through its own stdin, never the remaining SSH bash -s script.
+docker exec -i "$cid" python3 - "$backups_dir" "$site" "${backup_names[@]}" <<'PY_LOCAL_RETENTION'
+import pathlib
+import re
+import sys
+
+folder = pathlib.Path(sys.argv[1])
+site = sys.argv[2].replace('.', '_')
+names = sys.argv[3:]
+pattern = re.compile(
+    r'^(\d{8}_\d{6})-' + re.escape(site)
+    + r'-(database\.sql\.gz|files\.tar(?:\.gz)?|private-files\.tar(?:\.gz)?|site_config_backup\.json)$'
+)
+required = {'database', 'public', 'private', 'config'}
+
+def kind(suffix):
+    if suffix == 'database.sql.gz':
+        return 'database'
+    if suffix == 'site_config_backup.json':
+        return 'config'
+    return 'private' if suffix.startswith('private-') else 'public'
+
+matches = [pattern.fullmatch(name) for name in names]
+if len(names) != 4 or len(set(names)) != 4 or not all(matches):
+    raise SystemExit('FAILED: local retention requires four canonical backup members')
+stamps = {match[1] for match in matches}
+if len(stamps) != 1 or {kind(match[2]) for match in matches} != required:
+    raise SystemExit('FAILED: mixed or incomplete local backup set; nothing deleted')
+for name in names:
+    path = folder / name
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        raise SystemExit('FAILED: local backup member missing/empty; nothing deleted')
+keep_stamp = stamps.pop()
+removed = 0
+for path in folder.iterdir():
+    match = pattern.fullmatch(path.name)
+    if match and match[1] < keep_stamp and path.is_file() and not path.is_symlink():
+        path.unlink()
+        removed += 1
+print(f'Local retention: kept {keep_stamp} (4 files), removed {removed} older files')
+PY_LOCAL_RETENTION
 
 rm -rf "$staging_dir"
 staging_dir=''
