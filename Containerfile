@@ -39,6 +39,16 @@ RUN apt-get update && \
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends poppler-utils && \
   rm -rf /var/lib/apt/lists/*
 
+# Card #45: per-solution homework attachments were raised to 100 MiB total
+# (single file up to 100 MiB); frappe_docker's nginx default of 50m would 413
+# those uploads before they reach the backend. Raise the envsubst default the
+# nginx role uses (CLIENT_MAX_BODY_SIZE=110m keeps multipart headroom over
+# 104857600 bytes). Sites that set CLIENT_MAX_BODY_SIZE explicitly still win.
+RUN sed -i \
+  -e 's/CLIENT_MAX_BODY_SIZE=50m/CLIENT_MAX_BODY_SIZE=110m/' \
+  -e 's/defaulting to 50m/defaulting to 110m/' \
+  /usr/local/bin/nginx-entrypoint.sh
+
 USER frappe
 
 COPY --from=builder --chown=frappe:frappe /home/frappe/frappe-bench /home/frappe/frappe-bench
