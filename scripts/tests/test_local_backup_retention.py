@@ -120,7 +120,7 @@ class LocalRetentionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('removed 0 older files', result.stdout)
 
-    def integrated_backup(self, control_failure):
+    def integrated_backup(self, s3_failure=False, corrupt_archive=False):
         # Real Bash, tar and embedded Python; only external services/OS CLI
         # differences are replaced. This test does not certify flock semantics.
         old = self.make_set(OLD)
@@ -135,8 +135,7 @@ root=pathlib.Path(os.environ['FIXTURE_ROOT'])
 if name in ['find','flock']:sys.exit(0)
 if name=='stat':print(pathlib.Path(a[-1]).stat().st_size);sys.exit(0)
 if name=='ssh':
- sys.stdin.buffer.read()
- sys.exit(17 if os.environ['CONTROL_FAILURE']=='1' else 0)
+ (root/'unexpected-ssh').touch();sys.exit(99)
 if name=='docker':
  if a[0]=='compose':
   print('mock-cid' if 'ps' in a else 'bench backup complete');sys.exit(0)
@@ -157,30 +156,45 @@ sys.exit(2)
         script.write_text(SOURCE.replace('/tmp', str(self.root)))
         env = dict(os.environ, PATH=str(bins)+':'+os.environ['PATH'],
                    FIXTURE_ROOT=str(self.root), CURRENT_NAMES=json.dumps(current),
-                   CONTROL_FAILURE='1' if control_failure else '0',
                    TUTOR_COMPOSE_DIR=str(self.root), TUTOR_SITE=SITE,
                    TUTOR_BACKUP_LOCK_FILE=str(self.root/'server.lock'))
-        result = subprocess.run(['bash', str(script), 'control.invalid', 'daily'],
+        result = subprocess.run(['bash', str(script), 'daily'],
                                 env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(list(self.root.glob('lms-backup-staging.*')))
-        if control_failure:
+        self.assertTrue(all((self.root / name).exists() for name in old + current))
+        self.assertFalse((self.root/'retention-executed').exists())
+        self.assertFalse((self.root/'unexpected-ssh').exists())
+        archive_name=next(line.split('=',1)[1] for line in result.stdout.splitlines() if line.startswith('BACKUP_FILE='))
+        archive=self.root/archive_name
+        self.assertTrue(archive.is_file())
+        if s3_failure:
+            # The caller does not finalize after a failed upload: older valid
+            # local sets must remain available for recovery/retry.
+            return
+        if corrupt_archive:
+            with archive.open('ab') as f:f.write(b'corruption')
+        result = subprocess.run(['bash', str(script), 'finalize', archive_name],
+                                env=env, text=True, capture_output=True, timeout=20)
+        if corrupt_archive:
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue(all((self.root / name).exists() for name in old + current))
             self.assertFalse((self.root/'retention-executed').exists())
-            self.assertNotIn('BACKUP_FILE=', result.stdout)
         else:
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(all(not (self.root / name).exists() for name in old))
             self.assertTrue(all((self.root / name).exists() for name in current))
             self.assertTrue((self.root/'retention-executed').exists())
-            self.assertIn('BACKUP_FILE=', result.stdout)
-            self.assertEqual(len(list(self.root.glob('lms-backup-daily-*.tgz'))), 1)
+            self.assertFalse(Path(str(archive)+'.retention.json').exists())
 
-    def test_full_script_prunes_after_successful_control_delivery(self):
-        self.integrated_backup(False)
+    def test_full_script_prunes_only_after_explicit_s3_finalize(self):
+        self.integrated_backup()
 
-    def test_full_script_control_failure_does_not_run_retention(self):
-        self.integrated_backup(True)
+    def test_s3_failure_preserves_older_local_backups(self):
+        self.integrated_backup(s3_failure=True)
+
+    def test_changed_archive_blocks_local_retention(self):
+        self.integrated_backup(corrupt_archive=True)
 
 
 if __name__ == '__main__':

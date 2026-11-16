@@ -1,41 +1,21 @@
-# Бекапы LMS production: control + S3
+# Бекапы production: S3 и локальный набор на production
 
-## Где какой код (карта)
+## Рабочая схема
 
-| Кусок | Где | Что делает |
-| --- | --- | --- |
-| Общий прод-бекап | `scripts/backup-production.sh` (новый) | На production: `bench backup --with-files` → `lms-backup[-label]-<TS>.tgz` (+`SHA256SUMS` внутри) → отправка на control (`backuprecv@… put …`). tgz остаётся в `/tmp` на проде для забора раннером; маркеры `BACKUP_FILE/SHA256/SIZE` |
-| S3-помощник | `scripts/s3-backup.sh` (новый) | Запускается на production/preprod через ssh (rclone): `upload` (tgz + `.sha256` сайдкар, проверка размера, ротация), `download <key|latest>` (проверка sha256), `retention`. Секреты — временный env-файл `/run/tutor-s3.env` (tmpfs, 600, удаляется cleanup-шагом). Любой S3-провайдер через `S3_ENDPOINT_URL` |
-| rclone на серверах | `scripts/install-rclone.sh` (новый) | rclone v1.75.2 (linux-amd64, sha256-проверка) установлен на production и preprod 2026-11-04. AWS CLI v2 не используется: его стек TLS (s2n) не соединяется с Selectel — см. `s3-net-diagnostic.yml` |
-| Релиз | `.github/workflows/deploy-production.yml` | Перед выкладкой: прод-бекап (общий скрипт) → control → **upload в S3 с прода (RU→RU)** → очистка `/run/tutor-s3.env` и `/tmp` на проде |
-| Клон прода на препрод | `.github/workflows/deploy-preprod.yml` (`clone_prod`) | Fresh-бекап прода (label `fresh`) → control + S3 с прода → **препрод сам скачивает из S3** (проверка восстанавливаемости по sha256-сайдкару) → restore. Без настроенного S3 — старый путь через раннер |
-| Ежедневный бекап | `.github/workflows/backup-daily.yml` | 03:00 МСК ежедневно (label `daily`): тот же поток → control + S3 + ротация + журнал `releases/backups.log` |
-| Приёмник на control | `tutor-control:/usr/local/bin/recv-backup.sh` | Forced-command SSH: принимает ровно `put lms-backup-*.tgz`, пишет в `/var/backups/production` (владелец `backuprecv`) |
-| Ежедневный бекап control | `tutor-control:/etc/cron.d/vikunja-backup` + `/usr/local/bin/vikunja-backup.sh` | tar Vikunja+Caddy в `/var/backups/vikunja`, ротация 7 дней |
+- Production и preprod остаются на VPS. Управляющий Raspberry Pi доступен только в домашней сети и не принимает бекапы.
+- `scripts/backup-production.sh [fresh|daily]` создаёт полный набор: БД, публичные/приватные файлы, конфигурация сайта; проверяет состав и записывает архив с `SHA256SUMS`. Печатает `BACKUP_FILE`, `BACKUP_SHA256`, `BACKUP_SIZE`.
+- Workflow загружает архив в S3 непосредственно с production через `scripts/s3-backup.sh upload`, проверяет размер и сохраняет SHA256-сайдкар.
+- Только после успешного upload workflow вызывает `backup-production.sh finalize <имя-архива>`. Проверяется неизменность архива, после чего удаляются более старые локальные наборы этого сайта. Новейший полный набор остаётся на production.
+- Ошибка создания/загрузки/проверки бекапа блокирует production-выкладку. S3 обязателен; запасного пути через control нет.
+- Preprod скачивает архив из S3 и проверяет SHA256 до восстановления.
+- Ежедневный запуск — `0 0 * * *` UTC, то есть 03:00 МСК; журнал — `releases/backups.log`.
+- Временные S3-ключи передаются только production/preprod, в уникальный для запуска файл `/run/tutor-s3-<run>-<attempt>.env` (0600), с обязательной очисткой при сбое. На Pi S3-ключей нет.
 
-Имя файла кодирует дату и источник: `lms-backup-<TS>.tgz` (релиз), `lms-backup-fresh-<TS>.tgz` (клон на препрод), `lms-backup-daily-<TS>.tgz` (по расписанию, если включить). Ротация в S3 сортирует/чистит по дате из имени, лейблы не влияют.
+## Получение бекапа через релизного бота
 
-## Потоки данных
+Команда владельца запускает `send-production-backup.yml`. Архив скачивается из S3 на production с проверкой SHA256, передаётся раннеру и ещё раз проверяется. Внутренние четыре файла проверяются по составу и SHA256. Бот отправляет ZIP либо части по 45 МиБ в прежний разрешённый чат. Временные ключи и архив удаляются; копия на Pi не создаётся.
 
-```
-release / daily (deploy-production.yml, backup-daily.yml):
-  prod: bench backup -> /tmp/lms-backup-<TS>.tgz ──put──> control /var/backups/production
-                        └──(прод сам, RU→RU)──> S3 (tgz + .sha256, проверка размера, ротация)
-
-clone_prod (deploy-preprod.yml):
-  prod: bench backup -> lms-backup-fresh-<TS>.tgz ──put──> control (старый путь, сохранён)
-                        └──> S3 ──(препрод сам скачивает, sha256-проверка)──> preprod restore
-```
-
-Загрузку в S3 выполняют RU-серверы, а не раннер GitHub: канал раннер→Selectel
-не пропускает ~400 МБ (36 минут и обрыв, run 41870610250), а AWS CLI v2 вдобавок
-не проходит TLS к Selectel (`AWS_IO_TLS_ERROR_NEGOTIATION_FAILURE`, диагностика
-run 41869442975: curl/openssl/rclone работают, aws cli v2 — нет). Раннер только
-оркестрирует: передаёт секреты во временный `/run/tutor-s3.env` (tmpfs) и
-запускает скрипты по ssh.
-
-Старый путь «бекап локально на control» сохранён. Пока S3 не настроен, шаг загрузки
-пишет `::warning::` и не падает; клон в этом режиме берёт проверенную копию с раннера.
+Production-архивы, уже находящиеся в S3, при миграции control не копируются и не изменяются.
 
 ## Настройка S3
 
@@ -84,47 +64,10 @@ shasum -a 256 /tmp/prod-backup.tgz                   # сверить вручн
 # полная БД сайта — только `bench --site … restore` / как в restore-prod.sh
 ```
 
-## Ограничения и заметки
+## Безопасность и параллельность
 
-- **Локальное хранение на production — один полный набор.** `bench backup`
-  сначала создаёт файлы на диске; возрастная очистка Frappe (~23 ч) сама по себе
-  не ограничивает число копий. После успешной отправки нового архива на control
-  общий скрипт проверяет четыре исходных файла одного набора (БД, public/private,
-  конфигурация) и удаляет более старые локальные файлы этого сайта. При ошибке
-  создания/отправки эта ротация не запускается. Посторонние файлы, симлинки и
-  более новые наборы не удаляются. Временный tgz убирается workflow. История
-  остаётся в S3 (30 дней) и на control; это не режим «только S3». Прямой ручной
-  `bench backup` вне общего скрипта использует собственную возрастную политику Frappe.
-- **Control без ротации:** `/var/backups/production` уже ~15 ГБ (79 ГБ диск, 34 ГБ
-  свободно). Ежедневный бекап добавляет ~12 ГБ/мес — без ротации диск кончится
-  примерно через два месяца. Предложение (не включено — удаляет бекапы, нужно
-  решение владельца): файл `/etc/cron.d/lms-backup-retention` на control со строкой
-  `40 4 * * * root find /var/backups/production -type f -name 'lms-backup-*.tgz' -mtime +14 -delete`
-- **Ежедневный бекап:** `.github/workflows/backup-daily.yml` — расписание
-  `0 0 * * *` UTC = **03:00 МСК** ежедневно (МСК = UTC+3 круглый год), плюс ручной
-  `workflow_dispatch`. Поток тот же: общий скрипт (label `daily`) → control →
-  забор на раннер → S3 (ротация 30 дней) → очистка `/tmp` прода → строка в
-  `releases/backups.log` (коммит от backup-bot; ежедневный коммит заодно не даёт
-  GitHub отключить расписание после 60 дней тишины в репозитории). Для этого
-  workflow пустой `S3_BUCKET` — ошибка, а не предупреждение. Задержка старта на
-  несколько минут в пиковое время — норма GitHub Actions; о провале GitHub
-  присылает письмо подписчикам репозитория. Telegram-уведомлений нет
-  (правило: без отдельной авторизации владельца).
-- Ротация в S3 чистит только `lms-backup[-label]-YYYYMMDDTHHMMSSZ.tgz` (+`.sha256`)
-  внутри префикса — посторонние объекты не трогает. Канонический формат имени
-  проверяется одной функцией и в upload, и в latest, и в retention, и в download;
-  ошибка листинга S3 валит команду (нет молчаливых «удалено 0»).
-- Контракт `s3-backup.sh`: `upload` печатает `S3_KEY=<prefix>/<имя>`; `download`
-  принимает как полный ключ из этого маркера, так и само имя файла.
-- Параллельность: у трёх workflow разные concurrency groups, поэтому общий
-  прод-скрипт сериализует выполнение серверным локом
-  `/run/lock/lms-backup-production.lock` (flock, ожидание до 10 минут) и использует
-  уникальный staging-каталог на запуск (`/tmp/lms-backup-staging.*`); bench backup
-  и выбор свежего сета тоже проходят под локом.
-- **Почему rclone, а не AWS CLI:** диагностикой 2026-11-04 (workflow
-  `s3-net-diagnostic.yml`, запуск вручную) установлено: с раннера GitHub
-  curl/openssl/rclone к Selectel работают, а AWS CLI v2 (стек TLS s2n) падает
-  с `AWS_IO_TLS_ERROR_NEGOTIATION_FAILURE` даже на `s3 ls`. Поэтому S3-шаги
-  используют rclone; диагностический workflow оставлен для сетевых проверок.
-- Для серверного шифрования/версионирования бакета настройте их на стороне провайдера
-  (например, SSE-S3, versioning + lifecycle) — скрипт не мешает.
+- Локальная ротация работает только после подтверждённого S3 upload; неполный/изменённый набор не даёт удалить прежние копии. Посторонние файлы, симлинки и более новые наборы сохраняются.
+- Создание и финализация сериализуются серверным `flock`; staging и metadata привязаны к архиву. S3 env-файлы уникальны для workflow run/attempt.
+- Ротация S3 применяется только к каноническим именам в основном префиксе; `control-archive/` и посторонние объекты она не затрагивает.
+- Используется rclone: AWS CLI v2 не проходил TLS к Selectel. Большие передачи выполняются с RU-серверов, а не напрямую раннером в Selectel.
+- Восстановление управляющего Pi выполняется локально: `scripts/recover-control-local.sh [gateway|release|all]`. Production-релиз остаётся явной командой владельца с неизменяемым тегом.
