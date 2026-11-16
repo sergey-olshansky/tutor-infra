@@ -71,3 +71,9 @@ shasum -a 256 /tmp/prod-backup.tgz                   # сверить вручн
 - Ротация S3 применяется только к каноническим именам в основном префиксе; `control-archive/` и посторонние объекты она не затрагивает.
 - Используется rclone: AWS CLI v2 не проходил TLS к Selectel. Большие передачи выполняются с RU-серверов, а не напрямую раннером в Selectel.
 - Восстановление управляющего Pi выполняется локально: `scripts/recover-control-local.sh [gateway|release|all]`. Production-релиз остаётся явной командой владельца с неизменяемым тегом.
+
+### Isolated restore verification
+
+Run `verify-production-backup.yml` to check the latest existing S3 archive without deploying or replacing the occupied preprod site. The job verifies the S3 checksum and all four embedded files, restores attachments and SQL into disposable storage on preprod, checks MariaDB tables, and verifies that both Course Lesson text fields remain Long Text. It creates no new production backup and sends no Telegram messages.
+
+The restore uses the existing preprod database image in a separate container with no network, a read-only root filesystem, bounded memory/CPU and a reserved 3 GiB scratch filesystem. At least 768 MiB available RAM and space for the download plus 5 GiB are required before the check begins. Temporary credentials, the container and scratch storage are removed after the job; active preprod data, task ownership and images stay in place. A successful check requires the `ISOLATED_RESTORE_PASS` marker.

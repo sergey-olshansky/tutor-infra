@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 
 
-def prepare_parts(archive: Path, directory: Path, part_size=45 * 1024 * 1024):
+def validate_and_extract(archive: Path, directory: Path):
     extracted = directory / 'files'
     extracted.mkdir()
     with tarfile.open(archive) as tar:
@@ -56,6 +56,11 @@ def prepare_parts(archive: Path, directory: Path, part_size=45 * 1024 * 1024):
                 digest.update(block)
         if digest.hexdigest() != expected:
             raise RuntimeError('Embedded backup checksums failed')
+    return extracted
+
+
+def prepare_parts(archive: Path, directory: Path, part_size=45 * 1024 * 1024):
+    extracted = validate_and_extract(archive, directory)
     zipped = directory / 'backup.zip'
     with zipfile.ZipFile(zipped, 'w', compression=zipfile.ZIP_DEFLATED) as out:
         for path in sorted(extracted.rglob('*')):
