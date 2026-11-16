@@ -1,0 +1,58 @@
+name: Verify Production Backup (isolated preprod)
+run-name: "verify-s3-backup-${{ github.run_id }}-${{ github.run_attempt }}"
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: isolated-production-backup-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure preprod SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' '${{ secrets.PREPROD_SSH_KEY }}' > ~/.ssh/id_ed25519
+          printf '%s\n' '${{ secrets.PREPROD_KNOWN_HOSTS }}' > ~/.ssh/known_hosts
+      - name: Download existing verified S3 archive and restore in isolation
+        env:
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ vars.S3_REGION }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: |
+          set -euo pipefail
+          [[ -n "$S3_BUCKET" ]] || { echo 'S3 is required'; exit 1; }
+          HOST=root@${{ secrets.PREPROD_HOST }}
+          ROOT=/var/tmp/claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          ssh -o BatchMode=yes "$HOST" "install -d -m 700 '$ROOT'; touch '$ROOT/allow-verify'"
+          printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_BUCKET=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=%s\nS3_PREFIX=%s\n' \
+            "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" "$S3_BUCKET" "$S3_ENDPOINT_URL" "$S3_REGION" "$S3_PREFIX" \
+            | ssh -o BatchMode=yes "$HOST" 'umask 077; cat > /run/claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}.env'
+          ssh -o BatchMode=yes "$HOST" \
+            "set -a; . /run/claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}.env; set +a; export S3_MIN_FREE_BYTES=5368709120; bash -s -- download latest '$ROOT/backup.tgz'" \
+            < scripts/s3-backup.sh
+          scp -o BatchMode=yes scripts/send-backup-telegram.py scripts/verify-backup-restore.py scripts/cleanup-restore-check.sh "$HOST:$ROOT/"
+          ssh -o BatchMode=yes "$HOST" "systemd-run --unit=claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }} --wait --pipe --collect --property=ConditionPathExists='$ROOT/allow-verify' --property=RuntimeMaxSec=20min --property=TimeoutStopSec=20s --property=KillMode=control-group --property=MemoryMax=256M --property=MemorySwapMax=128M --property='ExecStopPost=/bin/bash $ROOT/cleanup-restore-check.sh $ROOT claw-restore-check-${{ github.run_id }}-${{ github.run_attempt }}' env CLAW_RESTORE_RUN=${{ github.run_id }}-${{ github.run_attempt }} python3 '$ROOT/verify-backup-restore.py' '$ROOT/backup.tgz'" | tee "$RUNNER_TEMP/restore-verify.log"
+          grep -q '^ISOLATED_RESTORE_PASS ' "$RUNNER_TEMP/restore-verify.log"
+      - name: Remove temporary credentials and restore files
+        if: ${{ always() }}
+        run: |
+          ssh -o BatchMode=yes root@${{ secrets.PREPROD_HOST }} bash -s <<'REMOTE'
+          set -euo pipefail
+          ROOT=/var/tmp/claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          rm -f /run/claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}.env "$ROOT/allow-verify"
+          systemctl stop claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}.service || true
+          if systemctl is-active --quiet claw-s3-verify-${{ github.run_id }}-${{ github.run_attempt }}.service; then exit 1; fi
+          if [[ -f "$ROOT/cleanup-restore-check.sh" ]]; then
+            bash "$ROOT/cleanup-restore-check.sh" "$ROOT" claw-restore-check-${{ github.run_id }}-${{ github.run_attempt }}
+          fi
+          rm -rf -- "$ROOT"
+          REMOTE

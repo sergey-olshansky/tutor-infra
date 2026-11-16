@@ -1,101 +1,98 @@
 #!/usr/bin/env bash
-
-# Общий бекап production LMS: bench backup -> lms-backup-*.tgz (+SHA256SUMS)
-# -> отправка на control (старый путь, остаётся). Выполняется НА production
-# через `ssh root@PROD bash -s -- <control-host> [label] < scripts/backup-production.sh`.
-# Готовый tgz остаётся в /tmp — раннер забирает его для загрузки в S3 и затем
-# удаляет. Маркеры для раннера (stdout): BACKUP_FILE=, BACKUP_SHA256=, BACKUP_SIZE=.
-# Параллельные вызовы сериализуются локом /run/lock/lms-backup-production.lock.
-#
-# bench backup с --with-files делает свежий дамп (force=True). Возрастная
-# очистка Frappe (~23 ч) не ограничивает число запусков: после отправки на
-# control сохраняем только созданный полный локальный набор.
+# Create a complete production backup. Finalize local retention ONLY after
+# the caller has uploaded and verified this archive in S3. No control host.
 set -Eeuo pipefail
-
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-	printf 'Usage: %s <control-host> [label]\n' "$0" >&2
-	exit 2
+mode=create
+label=''
+backup_file=''
+if [[ "${1:-}" == finalize ]]; then
+    [[ $# == 2 ]] || { echo 'Usage: backup-production.sh finalize <backup-file.tgz>' >&2; exit 2; }
+    mode=finalize; backup_file="$2"
+    [[ "$backup_file" =~ ^lms-backup(-[a-z]+)?-[0-9]{8}T[0-9]{6}Z\.tgz$ ]] || exit 2
+else
+    [[ $# -le 1 ]] || { echo 'Usage: backup-production.sh [fresh|daily]' >&2; exit 2; }
+    label="${1:-}"
+    case "$label" in ''|fresh|daily) ;; *) exit 2 ;; esac
 fi
-control_host="$1"
-label="${2:-}"
-case "$label" in
-	"") name_prefix='lms-backup' ;;
-	fresh|daily) name_prefix="lms-backup-$label" ;;
-	*) printf 'Invalid label: %s (allowed: fresh, daily)\n' "$label" >&2; exit 2 ;;
-esac
-
 readonly compose_dir="${TUTOR_COMPOSE_DIR:-/srv/tutor/frappe_docker}"
 readonly site="${TUTOR_SITE:-learn.vladastay.ru}"
-readonly control_user='backuprecv'
-readonly control_key='/root/.ssh/backup-to-control'
 readonly backups_dir="/home/frappe/frappe-bench/sites/$site/private/backups"
 readonly lock_file="${TUTOR_BACKUP_LOCK_FILE:-/run/lock/lms-backup-production.lock}"
-
-# Все три workflow (release, clone, daily) имеют разные concurrency groups в
-# GitHub Actions, поэтому сериализуем бекапы на самом сервере. Лок держится до
-# выхода скрипта: bench backup и выбор четырёх свежих файлов работают с общим
-# каталогом сайта, гонки недопустимы.
 exec 9>"$lock_file"
-if ! flock -w 600 9; then
-	printf 'FAILED: another lms backup holds %s\n' "$lock_file" >&2
-	exit 1
-fi
-
-# Staging-каталог убираем при любом выходе; tgz — только при сбое (при успехе
-# его забирает раннер). Каталог уникален на запуск — параллельные запуски (если
-# лок недоступен, например при ручном вызове) не конфликтуют.
-staging_dir=''
-archive_path=''
-cleanup_on_exit() {
-	local code=$?
-	[[ -z "$staging_dir" ]] || rm -rf -- "$staging_dir"
-	if [[ "$code" -ne 0 && -n "$archive_path" ]]; then
-		rm -f -- "$archive_path"
-	fi
-}
-trap cleanup_on_exit EXIT
-
+flock -w 600 9 || { echo 'FAILED: production backup lock unavailable' >&2; exit 1; }
 cd "$compose_dir"
 compose() {
-	docker compose -f compose.yaml -f overrides/compose.mariadb.yaml \
-		-f overrides/compose.redis.yaml -f overrides/compose.https.yaml "$@"
+    docker compose -f compose.yaml -f overrides/compose.mariadb.yaml \
+        -f overrides/compose.redis.yaml -f overrides/compose.https.yaml "$@"
 }
-
-# Убираем tgz от прерванных запусков (старше часа), чтобы /tmp не рос.
-find /tmp -maxdepth 1 -name 'lms-backup-*.tgz' -mmin +60 -delete 2>/dev/null || true
-
-printf '== Creating bench backup (with files)...\n'
-compose exec -T backend bench --site "$site" backup --with-files </dev/null 2>&1 | tail -2
-
-cid=$(compose ps -q backend)
-ts=$(date -u +%Y%m%dT%H%M%SZ)
-staging_dir=$(mktemp -d /tmp/lms-backup-staging.XXXXXX)
-# Свежий сет — 4 новейших файла: БД, публичные/приватные файлы, site config.
-backup_names=()
-for f in $(docker exec "$cid" ls -t "$backups_dir" | head -4); do
-	docker cp "$cid:$backups_dir/$f" "$staging_dir/" 2>/dev/null
-	backup_names+=("$f")
-done
-file_count=$(ls -1 "$staging_dir" | wc -l)
-if [[ "$file_count" -ne 4 ]]; then
-	printf 'FAILED: expected 4 backup files, got %s\n' "$file_count" >&2
-	exit 1
-fi
-(cd "$staging_dir" && sha256sum ./* > SHA256SUMS)
-
-backup_file="${name_prefix}-${ts}.tgz"
-archive_path="/tmp/$backup_file"
-tar czf "$archive_path" -C "$staging_dir" .
-backup_sha256=$(sha256sum "$archive_path" | awk '{print $1}')
-backup_size=$(stat -c%s "$archive_path")
-
-printf '== Sending %s to control (%s)...\n' "$backup_file" "$control_host"
-ssh -i "$control_key" -o BatchMode=yes \
-	"$control_user@$control_host" "put $backup_file" < "$archive_path"
-
-# Delete older local sets only after this complete set has reached control.
-# Pass Python through its own stdin, never the remaining SSH bash -s script.
-docker exec -i "$cid" python3 - "$backups_dir" "$site" "${backup_names[@]}" <<'PY_LOCAL_RETENTION'
+staging_dir=''
+archive_path=''
+metadata=''
+cleanup_on_exit() {
+    local code=$?
+    [[ -z "$staging_dir" ]] || rm -rf -- "$staging_dir"
+    if [[ "$code" -ne 0 && "$mode" == create ]]; then
+        [[ -z "$archive_path" ]] || rm -f -- "$archive_path"
+        [[ -z "$metadata" ]] || rm -f -- "$metadata"
+    fi
+}
+trap cleanup_on_exit EXIT
+if [[ "$mode" == create ]]; then
+    # Stale staging archives are reproducible; production backup sets are not
+    # pruned until finalize is called after verified S3 upload.
+    find /tmp -maxdepth 1 -name 'lms-backup-*.tgz' -mmin +60 -delete 2>/dev/null || true
+    compose exec -T backend bench --site "$site" backup --with-files </dev/null 2>&1 | tail -2
+    cid=$(compose ps -q backend)
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    prefix=lms-backup; [[ -z "$label" ]] || prefix="$prefix-$label"
+    backup_file="$prefix-$ts.tgz"
+    archive_path="/tmp/$backup_file"
+    metadata="$archive_path.retention.json"
+    staging_dir=$(mktemp -d /tmp/lms-backup-staging.XXXXXX)
+    backup_names=()
+    while IFS= read -r f; do
+        [[ -z "$f" ]] || backup_names+=("$f")
+    done < <(docker exec "$cid" ls -t "$backups_dir" | head -4)
+    [[ ${#backup_names[@]} == 4 ]] || { echo 'FAILED: expected four backup members' >&2; exit 1; }
+    for f in "${backup_names[@]}"; do
+        [[ "$f" != */* ]] || exit 1
+        docker cp "$cid:$backups_dir/$f" "$staging_dir/" 2>/dev/null
+        [[ -s "$staging_dir/$f" ]] || { echo 'FAILED: empty backup member' >&2; exit 1; }
+    done
+    (cd "$staging_dir" && sha256sum ./* > SHA256SUMS && sha256sum -c SHA256SUMS)
+    tar czf "$archive_path" -C "$staging_dir" .
+    backup_sha256=$(sha256sum "$archive_path" | awk '{print $1}')
+    backup_size=$(stat -c%s "$archive_path")
+    python3 - "$metadata" "$backup_sha256" "$site" "${backup_names[@]}" <<'MANIFEST'
+import json,os,re,sys
+names=sys.argv[4:]
+pattern=re.compile(r'^(\d{8}_\d{6})-'+re.escape(sys.argv[3].replace('.','_'))+r'-(database\.sql\.gz|files\.tar(?:\.gz)?|private-files\.tar(?:\.gz)?|site_config_backup\.json)$')
+matches=[pattern.fullmatch(n) for n in names]
+if len(names)!=4 or len(set(names))!=4 or not all(matches):raise SystemExit('FAILED: invalid backup members')
+if len({m[1] for m in matches})!=1:raise SystemExit('FAILED: mixed backup timestamps')
+kinds={'config' if m[2]=='site_config_backup.json' else 'database' if m[2]=='database.sql.gz' else 'private' if m[2].startswith('private-') else 'public' for m in matches}
+if kinds!={'database','public','private','config'}:raise SystemExit('FAILED: incomplete backup set')
+fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+with os.fdopen(fd,'w') as f:json.dump({'sha256':sys.argv[2],'members':names},f)
+MANIFEST
+    printf 'BACKUP_FILE=%s\nBACKUP_SHA256=%s\nBACKUP_SIZE=%s\n' "$backup_file" "$backup_sha256" "$backup_size"
+else
+    archive_path="/tmp/$backup_file"
+    metadata="$archive_path.retention.json"
+    cid=$(compose ps -q backend)
+    # Validate the retained archive before allowing any local deletion.
+    python3 - "$archive_path" "$metadata" <<'CHECK'
+import hashlib,json,pathlib,sys
+p=pathlib.Path(sys.argv[1]);m=json.loads(pathlib.Path(sys.argv[2]).read_text())
+h=hashlib.sha256()
+with p.open('rb') as f:
+ for b in iter(lambda:f.read(8*1024*1024),b''):h.update(b)
+if h.hexdigest()!=m['sha256']:raise SystemExit('FAILED: archive changed; local sets retained')
+if len(m['members'])!=4:raise SystemExit('FAILED: invalid backup manifest')
+CHECK
+    backup_names=()
+    while IFS= read -r f; do backup_names+=("$f"); done < <(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))["members"]))' "$metadata")
+    docker exec -i "$cid" python3 - "$backups_dir" "$site" "${backup_names[@]}" <<'PY_LOCAL_RETENTION'
 import pathlib
 import re
 import sys
@@ -135,9 +132,5 @@ for path in folder.iterdir():
         removed += 1
 print(f'Local retention: kept {keep_stamp} (4 files), removed {removed} older files')
 PY_LOCAL_RETENTION
-
-rm -rf "$staging_dir"
-staging_dir=''
-printf 'BACKUP_FILE=%s\n' "$backup_file"
-printf 'BACKUP_SHA256=%s\n' "$backup_sha256"
-printf 'BACKUP_SIZE=%s\n' "$backup_size"
+    rm -f -- "$metadata"
+fi

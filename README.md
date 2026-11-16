@@ -13,36 +13,31 @@ Run from a trusted operator machine with working `gh` and `ssh tutor-vps`
 authentication:
 
 ```bash
-./deploy-production.sh lms-a1d219ad-infra-01234567
+./deploy-production.sh lms-a1d219ad-infra-01234567-run-123456789-1
 ```
 
-The script validates and pulls the exact tag before changing production. It
-uses a temporary GHCR login on the VPS, creates a Frappe backup including site
-files, saves the previous `.env`, atomically changes `CUSTOM_TAG`, recreates
-only application containers (not MariaDB or Redis), runs migrations, clears
-cache, and checks the public HTTPS endpoint.
-
-If container recreation fails before migrations, the previous tag is restored
-automatically. Once migrations begin, rollback is intentionally not automatic:
-the script prints the retained backup path so schema recovery can be planned
-without overwriting user data.
+The helper dispatches and watches the production workflow on `main`, using a unique
+request identifier. It requires the immutable accepted image tag and working `gh`
+authentication. The workflow creates and verifies the production backup in S3
+before deployment; local execution does not bypass those checks.
 
 ## Backups
 
-Release and preprod-clone backups are made by the shared
-`scripts/backup-production.sh` (runs on the production host via SSH): a Frappe
-`bench backup --with-files` set is packed into `lms-backup[-label]-<TS>.tgz`
-with an embedded `SHA256SUMS` and pushed to the control server
-(`/var/backups/production`). The runner additionally uploads the archive to S3
-(`scripts/s3-backup.sh`, any S3-compatible provider via `S3_ENDPOINT_URL`) with
-a `.sha256` sidecar, verifies the remote size and applies retention. The
-preprod clone downloads the backup from S3 before restoring, proving the S3
-copy is restorable. After delivery to control the shared script retains one
-complete local backup set on production; history remains on control and S3.
-Until S3 vars are configured the workflows warn and keep
-the control-only path. A daily scheduled backup runs at 03:00 Moscow time
-(`.github/workflows/backup-daily.yml`, label `daily`, journal in
-`releases/backups.log`). Full map, setup and restore runbook: `BACKUP.md`.
+Production backups are stored in S3. The production host creates a complete Frappe
+backup including files and a checksum manifest. The three backup/deploy workflows
+upload it directly from production to S3, verify the upload and only then finalize
+local retention, keeping one complete local production set. Failure blocks the
+release. Control/Raspberry Pi is not a backup receiver and holds no S3 credentials.
+
+The daily backup runs at 03:00 Moscow time. Preprod clones download and verify the
+archive from S3. The release bot's backup command dispatches
+`send-production-backup.yml`, which delivers the latest verified archive to its
+configured owner chat. Configuration and recovery: `BACKUP.md`.
+
+The control server now runs on the owner's LAN: Vikunja at
+`https://clawpi.local`, OpenClaw at `https://clawpi.local:8443`, SSH as
+`claw@clawpi.local`. Recover it from the LAN with
+`scripts/recover-control-local.sh`; hosted CI does not connect to the Pi.
 
 ## Production image retention
 

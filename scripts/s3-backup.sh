@@ -169,6 +169,19 @@ download() {
 	fi
 	is_canonical_name "$key" || { printf 'Invalid key: %s\n' "$key" >&2; exit 1; }
 
+	# Optional restore-verification margin: reject an oversized download before
+	# writing its first byte to the active server filesystem.
+	if [[ -n "${S3_MIN_FREE_BYTES:-}" ]]; then
+		[[ "$S3_MIN_FREE_BYTES" =~ ^[0-9]+$ ]] || { echo 'Invalid download free-space margin' >&2; return 1; }
+		local download_size free_bytes
+		download_size=$(remote_size "$key")
+		[[ "$download_size" =~ ^[0-9]+$ && "$download_size" -gt 0 ]] || { echo 'Invalid S3 object size' >&2; return 1; }
+		free_bytes=$(python3 -c 'import os,sys; s=os.statvfs(os.path.dirname(os.path.abspath(sys.argv[1]))); print(s.f_bavail*s.f_frsize)' "$dest")
+		if (( free_bytes < download_size + S3_MIN_FREE_BYTES )); then
+			echo 'Insufficient space for S3 download and reserved restore margin' >&2
+			return 1
+		fi
+	fi
 	rclone copyto "BK:$remote_root/$key" "$dest"
 	tmp=$(mktemp)
 	rclone copyto "BK:$remote_root/$key.sha256" "$tmp"

@@ -1,0 +1,57 @@
+name: Send Production Backup
+run-name: "send-backup-${{ inputs.request_id }}"
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Owner-authorized release bot request identifier
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: send-production-backup
+  cancel-in-progress: false
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure production SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' '${{ secrets.PROD_DEPLOY_KEY }}' > ~/.ssh/id_ed25519
+          printf '%s\n' '${{ secrets.PROD_KNOWN_HOSTS }}' > ~/.ssh/known_hosts
+      - name: Fetch latest verified backup from S3 on production
+        env:
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ vars.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ vars.S3_REGION }}
+          S3_PREFIX: ${{ vars.S3_PREFIX }}
+        run: |
+          set -euo pipefail
+          [[ -n "$S3_BUCKET" ]] || { echo 'S3 is required'; exit 1; }
+          PROD=root@${{ secrets.PROD_HOST }}
+          printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_BUCKET=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=%s\nS3_PREFIX=%s\n' \
+            "$S3_ACCESS_KEY_ID" "$S3_SECRET_ACCESS_KEY" "$S3_BUCKET" "$S3_ENDPOINT_URL" "$S3_REGION" "$S3_PREFIX" \
+            | ssh -o BatchMode=yes "$PROD" 'umask 077; cat > /run/tutor-send-s3-${{ github.run_id }}.env'
+          ssh -o BatchMode=yes "$PROD" \
+            'set -a; . /run/tutor-send-s3-${{ github.run_id }}.env; set +a; bash -s -- download latest /tmp/tutor-send-backup-${{ github.run_id }}.tgz' \
+            < scripts/s3-backup.sh
+          ssh -o BatchMode=yes "$PROD" 'sha256sum /tmp/tutor-send-backup-${{ github.run_id }}.tgz' | awk '{print $1}' > "$RUNNER_TEMP/backup.sha256"
+          ssh -o BatchMode=yes "$PROD" 'cat /tmp/tutor-send-backup-${{ github.run_id }}.tgz' > "$RUNNER_TEMP/backup.tgz"
+          printf '%s  %s\n' "$(cat "$RUNNER_TEMP/backup.sha256")" "$RUNNER_TEMP/backup.tgz" | sha256sum -c -
+      - name: Send archive to the configured owner chat
+        env:
+          RELEASE_TG_BOT_TOKEN: ${{ secrets.RELEASE_TG_BOT_TOKEN }}
+          RELEASE_TG_CHAT_ID: ${{ secrets.RELEASE_TG_CHAT_ID }}
+        run: python3 scripts/send-backup-telegram.py "$RUNNER_TEMP/backup.tgz"
+      - name: Remove temporary S3 credentials and archive
+        if: ${{ always() }}
+        run: |
+          ssh -o BatchMode=yes root@${{ secrets.PROD_HOST }} \
+            'rm -f /run/tutor-send-s3-${{ github.run_id }}.env /tmp/tutor-send-backup-${{ github.run_id }}.tgz'
