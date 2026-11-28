@@ -25,3 +25,4 @@
 2026-11-24T08:36:15Z | daily | lms-backup-daily-20261124T083518Z.tgz | 664964474 bytes | sha256 16cb52a71611cb6186444b366b4287a3238816de213d0583ca5d5120d0bd86be | s3=ok | https://github.com/sergey-olshansky/tutor-infra/actions/runs/45357388360
 2026-11-26T07:00:15Z | daily | lms-backup-daily-20261126T065918Z.tgz | 691836055 bytes | sha256 9a6afa262b5c62044a7c143d41470161bb4f2edbe7ab5f2e466d2b2b8e1b13a6 | s3=ok | https://github.com/sergey-olshansky/tutor-infra/actions/runs/45771964311
 2026-11-27T06:55:18Z | daily | lms-backup-daily-20261127T065422Z.tgz | 691793570 bytes | sha256 b4c247f4a53682120b81b6ef00cfca4e435b4e363d8eb908dcd394d64081924a | s3=ok | https://github.com/sergey-olshansky/tutor-infra/actions/runs/45954841566
+2026-11-28T06:29:27Z | daily | lms-backup-daily-20261128T062831Z.tgz | 691799560 bytes | sha256 92f4895ef52a82064d936d02e8bc8a07d7a641b30e07c512cc92294e33589670 | s3=ok | https://github.com/sergey-olshansky/tutor-infra/actions/runs/46116742958
